@@ -85,6 +85,14 @@ func New(lang Lang) Localizer {
 // Lang 返回当前生效语言（已解析，不会是 LangAuto）。
 func (l Localizer) Lang() Lang { return l.lang }
 
+// BundleLocales 返回读取 macOS 应用本地化名称时依次尝试的 .lproj 目录名。
+func (l Lang) BundleLocales() []string {
+	if l == LangZH {
+		return []string{"zh-Hans", "zh_CN", "zh"}
+	}
+	return []string{"en", "English", "Base"}
+}
+
 // SetLang 返回切换到指定语言后的新 Localizer。
 func (l Localizer) SetLang(lang Lang) Localizer {
 	return Localizer{lang: resolve(lang)}

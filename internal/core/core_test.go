@@ -267,3 +267,45 @@ func TestBatteryInfoIntegration(t *testing.T) {
 	}
 	t.Logf("battery: charge=%d health=%d cycles=%d", info.ChargePercent, info.HealthPercent, info.CycleCount)
 }
+
+func TestAnyExecutableInBundle(t *testing.T) {
+	executables := []string{
+		"/Applications/Foo.app/Contents/MacOS/Foo",
+		"/Applications/Bar.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper",
+	}
+	tests := []struct {
+		appPath string
+		want    bool
+	}{
+		{"/Applications/Foo.app", true},
+		{"/Applications/Bar.app", false},
+		{"/Applications/Foo", false},
+	}
+	for _, test := range tests {
+		if got := anyExecutableInBundle(executables, test.appPath); got != test.want {
+			t.Errorf("anyExecutableInBundle(%q) = %v, want %v", test.appPath, got, test.want)
+		}
+	}
+}
+
+func TestLocalizedBundleName(t *testing.T) {
+	app := filepath.Join(t.TempDir(), "Demo.app")
+	lproj := filepath.Join(app, "Contents", "Resources", "zh-Hans.lproj")
+	if err := os.MkdirAll(lproj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	strings := `"CFBundleDisplayName" = "演示";` + "\n"
+	if err := os.WriteFile(filepath.Join(lproj, "InfoPlist.strings"), []byte(strings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := bundleMetadata{Name: "Demo"}
+	if got := localizedBundleName(app, meta, []string{"zh-Hans"}); got != "演示" {
+		t.Fatalf("zh name = %q, want 演示", got)
+	}
+	if got := localizedBundleName(app, meta, []string{"en"}); got != "Demo" {
+		t.Fatalf("en name = %q, want Demo", got)
+	}
+	if got := localizedBundleName(app, bundleMetadata{}, nil); got != "Demo" {
+		t.Fatalf("fallback name = %q, want Demo", got)
+	}
+}

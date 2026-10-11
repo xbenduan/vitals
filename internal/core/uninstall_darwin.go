@@ -38,12 +38,16 @@ func (e *FullDiskAccessError) Error() string {
 }
 
 // ListApplications 返回用户可管理的应用，不包含 macOS 系统应用。
-func ListApplications(ctx context.Context) ([]AppInfo, error) {
+// locales 是按优先级排列的 .lproj 目录名，用于读取本地化显示名。
+// 应用体积与图标不在此处读取，需通过 BundleSize 与 ApplicationIconPNG 按需获取。
+// ctx 超时或取消时不报错，返回已扫描到的部分结果；调用方可通过 ctx.Err() 判断是否截断。
+func ListApplications(ctx context.Context, locales []string) ([]AppInfo, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 	roots := []string{"/Applications", filepath.Join(home, "Applications")}
+	running := runningExecutables(ctx)
 	var apps []AppInfo
 	for _, root := range roots {
 		found, walkErr := applicationsIn(root, 2)
@@ -51,47 +55,87 @@ func ListApplications(ctx context.Context) ([]AppInfo, error) {
 			return nil, walkErr
 		}
 		for _, path := range found {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+			if ctx.Err() != nil {
+				return sortApplications(apps), nil
 			}
 			meta, readErr := readBundleMetadata(path)
 			if readErr != nil {
 				continue
 			}
-			fallbackName := firstNonEmpty(meta.Name, meta.BundleName, strings.TrimSuffix(filepath.Base(path), ".app"))
-			name := localizedApplicationName(ctx, path, fallbackName)
 			apps = append(apps, AppInfo{
-				Name:     name,
+				Name:     localizedBundleName(path, meta, locales),
 				Path:     path,
 				BundleID: meta.Identifier,
 				Version:  meta.Version,
-				Size:     pathSize(path),
-				Running:  ApplicationRunning(ctx, path),
+				Running:  anyExecutableInBundle(running, path),
 				Selected: true,
-				IconPNG:  applicationIconPNG(ctx, path, meta),
 			})
 		}
 	}
+	return sortApplications(apps), nil
+}
+
+func sortApplications(apps []AppInfo) []AppInfo {
 	slices.SortFunc(apps, func(a, b AppInfo) int {
 		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
-	return apps, nil
+	return apps
 }
 
-func localizedApplicationName(ctx context.Context, appPath, fallback string) string {
-	output, err := exec.CommandContext(ctx, "/usr/bin/mdls", "-raw", "-name", "kMDItemDisplayName", appPath).Output()
+// BundleSize 统计应用包占用的磁盘空间。目录较大时耗时较长，应在后台调用。
+func BundleSize(appPath string) uint64 {
+	return pathSize(appPath)
+}
+
+// runningExecutables 一次性读取所有进程的可执行文件路径，一次 ps 即可判断全部应用是否运行。
+func runningExecutables(ctx context.Context) []string {
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "comm=").Output()
 	if err != nil {
-		return fallback
+		return nil
 	}
-	name := strings.Trim(strings.TrimSpace(string(output)), `"`)
-	name = strings.TrimSuffix(name, ".app")
-	if name == "" || name == "(null)" {
-		return fallback
+	lines := strings.Split(string(output), "\n")
+	executables := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			executables = append(executables, line)
+		}
 	}
-	return name
+	return executables
 }
 
-func applicationIconPNG(ctx context.Context, appPath string, meta bundleMetadata) []byte {
+// anyExecutableInBundle 判断应用主程序目录下是否有进程在运行。
+func anyExecutableInBundle(executables []string, appPath string) bool {
+	prefix := appPath + "/Contents/MacOS/"
+	for _, executable := range executables {
+		if strings.HasPrefix(executable, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// localizedBundleName 按 locales 顺序读取 <lproj>/InfoPlist.strings 中的显示名，
+// 没有本地化时回退到 Info.plist 的 CFBundleDisplayName / CFBundleName / 目录名。
+func localizedBundleName(appPath string, meta bundleMetadata, locales []string) string {
+	resources := filepath.Join(appPath, "Contents", "Resources")
+	for _, locale := range locales {
+		localized, err := readBundlePlist(filepath.Join(resources, locale+".lproj", "InfoPlist.strings"))
+		if err != nil {
+			continue
+		}
+		if name := firstNonEmpty(localized.Name, localized.BundleName); name != "" {
+			return name
+		}
+	}
+	return firstNonEmpty(meta.Name, meta.BundleName, strings.TrimSuffix(filepath.Base(appPath), ".app"))
+}
+
+// ApplicationIconPNG 把应用图标转为 128x128 PNG。依赖 sips 子进程，应在后台调用；失败返回 nil。
+func ApplicationIconPNG(ctx context.Context, appPath string) []byte {
+	meta, err := readBundleMetadata(appPath)
+	if err != nil {
+		return nil
+	}
 	resources := filepath.Join(appPath, "Contents", "Resources")
 	var candidates []string
 	for _, name := range []string{meta.IconFile, meta.IconName} {
@@ -159,7 +203,12 @@ func applicationsIn(root string, depth int) ([]string, error) {
 }
 
 func readBundleMetadata(appPath string) (bundleMetadata, error) {
-	data, err := os.ReadFile(filepath.Join(appPath, "Contents", "Info.plist"))
+	return readBundlePlist(filepath.Join(appPath, "Contents", "Info.plist"))
+}
+
+// readBundlePlist 解析 Info.plist 或 InfoPlist.strings 中与 bundleMetadata 同名的键。
+func readBundlePlist(path string) (bundleMetadata, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return bundleMetadata{}, err
 	}
@@ -172,8 +221,7 @@ func readBundleMetadata(appPath string) (bundleMetadata, error) {
 
 // ApplicationRunning 判断应用包当前是否仍有主程序或辅助进程。
 func ApplicationRunning(ctx context.Context, appPath string) bool {
-	command := exec.CommandContext(ctx, "/usr/bin/pgrep", "-f", appPath+"/Contents/MacOS/")
-	return command.Run() == nil
+	return anyExecutableInBundle(runningExecutables(ctx), appPath)
 }
 
 // ScanRelatedFiles 根据 bundle id 与应用名扫描关联文件，并标注命中置信度。

@@ -63,7 +63,6 @@ type AppInfo struct {
 	Scanned    bool
 	ScanError  string
 	TotalBytes uint64
-	IconPNG    []byte
 }
 
 // RelatedFile 是根据 bundle id 或应用名命中的卸载候选项。

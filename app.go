@@ -52,6 +52,8 @@ type application struct {
 
 	apps             []core.AppInfo
 	appIcons         map[string]*ui.Bitmap
+	iconRequested    map[string]bool
+	iconSlots        chan struct{}
 	appQuery         string
 	selectedApp      int
 	loadingApps      bool
@@ -73,16 +75,20 @@ type application struct {
 const (
 	panelWidth  = 480
 	panelHeight = 620
+	iconWorkers = 4
+	iconTimeout = 10 * time.Second
 )
 
 func newApplication() *application {
 	app := &application{
-		sampler:      core.NewSampler(),
-		selectedApp:  -1,
-		loadingApps:  true,
-		appIcons:     make(map[string]*ui.Bitmap),
-		settings:     defaultSettings(),
-		showOnLaunch: launchWindowVisible(),
+		sampler:       core.NewSampler(),
+		selectedApp:   -1,
+		loadingApps:   true,
+		appIcons:      make(map[string]*ui.Bitmap),
+		iconRequested: make(map[string]bool),
+		iconSlots:     make(chan struct{}, iconWorkers),
+		settings:      defaultSettings(),
+		showOnLaunch:  launchWindowVisible(),
 	}
 	app.localizer = i18n.New(i18n.Lang(app.settings.Language))
 	app.sampleEvery.Store(int64(app.settings.refreshInterval()))
@@ -233,22 +239,37 @@ func (a *application) sampleLoop() {
 func (a *application) loadApplications() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	apps, err := core.ListApplications(ctx)
+	apps, err := core.ListApplications(ctx, a.localizer.Lang().BundleLocales())
+	if ctx.Err() != nil {
+		log.Println("list applications: timed out, showing partial results")
+	}
 	a.win.Update(func() {
 		a.loadingApps = false
 		a.apps = apps
-		for _, app := range apps {
-			if len(app.IconPNG) == 0 {
-				continue
-			}
-			if icon, decodeErr := ui.DecodeBitmap(app.IconPNG); decodeErr == nil {
-				a.appIcons[app.Path] = icon
-			}
-		}
 		if err != nil {
 			a.showActionError(err)
 		}
 	})
+}
+
+// requestAppIcon 在首次渲染某个应用时异步转换其图标，期间界面显示占位头像。
+// 每个路径只请求一次，失败不重试。只能在 UI 线程调用：iconRequested 与 appIcons 都只在 build 回调和 win.Update 内读写。
+func (a *application) requestAppIcon(appPath string) {
+	if appPath == "" || a.iconRequested[appPath] {
+		return
+	}
+	a.iconRequested[appPath] = true
+	go func() {
+		a.iconSlots <- struct{}{}
+		defer func() { <-a.iconSlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), iconTimeout)
+		defer cancel()
+		icon, err := ui.DecodeBitmap(core.ApplicationIconPNG(ctx, appPath))
+		if err != nil {
+			return
+		}
+		a.win.Update(func() { a.appIcons[appPath] = icon })
+	}()
 }
 
 func (a *application) selectApplication(index int) {
@@ -267,13 +288,17 @@ func (a *application) selectApplication(index int) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
+		sizeDone := make(chan uint64, 1)
+		go func() { sizeDone <- core.BundleSize(app.Path) }()
 		files, err := core.ScanRelatedFiles(ctx, app)
+		size := <-sizeDone
 		a.win.Update(func() {
 			a.scanningRelated = false
 			if index >= len(a.apps) || a.apps[index].Path != app.Path {
 				return
 			}
 			a.apps[index].Scanned = true
+			a.apps[index].Size = size
 			a.apps[index].Related = files
 			a.apps[index].TotalBytes = a.apps[index].Size
 			for _, file := range files {

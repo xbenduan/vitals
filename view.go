@@ -567,6 +567,7 @@ func (a *application) applicationImage(c *ui.Context, appPath, name string, size
 		ui.Image(c, icon).Size(size, size).Fit(ui.Contain).Radius(6).Label(name)
 		return
 	}
+	a.requestAppIcon(appPath)
 	ui.Avatar(c, name, nil).Size(size, size)
 }
 
