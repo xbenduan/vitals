@@ -1,7 +1,7 @@
 {
   "name": "Vitals",
   "identifier": "dev.vitals.mac",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "out": "build",
   "macos": {
     "minimumSystemVersion": "13.0",
