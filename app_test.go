@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"image/png"
+	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -25,6 +26,29 @@ func TestCompactRate(t *testing.T) {
 		if got := compactRate(test.value); got != test.want {
 			t.Errorf("compactRate(%d) = %q, want %q", test.value, got, test.want)
 		}
+	}
+}
+
+func TestDevelopmentUserDataPath(t *testing.T) {
+	appData := "/Users/example/Library/Application Support"
+	if got := developmentUserDataPath("/tmp/Vitals Dev.app/Contents/MacOS/Vitals Dev", appData); got != filepath.Join(appData, "Vitals Dev") {
+		t.Fatalf("development data path = %q", got)
+	}
+	if got := developmentUserDataPath("/Applications/Vitals.app/Contents/MacOS/Vitals", appData); got != "" {
+		t.Fatalf("production data path = %q, want empty", got)
+	}
+}
+
+func TestExcludeRelatedPathProtectsActiveApplicationData(t *testing.T) {
+	active := "/Users/example/Library/Application Support/Vitals Dev"
+	files := []core.RelatedFile{
+		{Path: active},
+		{Path: filepath.Join(active, "settings.json")},
+		{Path: "/Users/example/Library/Application Support/Vitals"},
+	}
+	got := excludeRelatedPath(files, active)
+	if len(got) != 1 || got[0].Path != "/Users/example/Library/Application Support/Vitals" {
+		t.Fatalf("filtered related files = %#v", got)
 	}
 }
 

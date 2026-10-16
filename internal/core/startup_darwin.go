@@ -39,6 +39,7 @@ type StartupItem struct {
 
 type launchdConfig struct {
 	Label                 string         `plist:"Label"`
+	AssociatedBundleIDs   []string       `plist:"AssociatedBundleIdentifiers"`
 	Program               string         `plist:"Program"`
 	ProgramArguments      []string       `plist:"ProgramArguments"`
 	RunAtLoad             bool           `plist:"RunAtLoad"`

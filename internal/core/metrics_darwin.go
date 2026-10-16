@@ -51,6 +51,7 @@ type processMemorySample struct {
 	name       string
 	executable string
 	rss        uint64
+	cpuPercent float64
 }
 
 type procTaskInfo struct {
@@ -174,6 +175,8 @@ func (s *Sampler) Sample(ctx context.Context) (Snapshot, error) {
 	next.HistoryMemory = appendHistory(next.HistoryMemory, next.MemoryPercent)
 	networkScale := float64(next.NetworkDown + next.NetworkUp)
 	next.HistoryNetwork = appendHistory(next.HistoryNetwork, networkScale)
+	next.HistoryNetworkDown = appendHistory(next.HistoryNetworkDown, float64(next.NetworkDown))
+	next.HistoryNetworkUp = appendHistory(next.HistoryNetworkUp, float64(next.NetworkUp))
 	s.lastSampleAt = now
 	s.snapshot = next
 	return cloneSnapshot(next), firstErr
@@ -217,6 +220,8 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	value.HistoryCPU = append([]float64(nil), value.HistoryCPU...)
 	value.HistoryMemory = append([]float64(nil), value.HistoryMemory...)
 	value.HistoryNetwork = append([]float64(nil), value.HistoryNetwork...)
+	value.HistoryNetworkDown = append([]float64(nil), value.HistoryNetworkDown...)
+	value.HistoryNetworkUp = append([]float64(nil), value.HistoryNetworkUp...)
 	value.MemoryConsumers = append([]MemoryConsumer(nil), value.MemoryConsumers...)
 	return value
 }
@@ -243,9 +248,22 @@ func memoryConsumers(ctx context.Context, totalMemory uint64) ([]MemoryConsumer,
 			name:       processName(pid),
 			executable: processExecutable(pid),
 			rss:        info.ResidentSize,
+			cpuPercent: processCPUPercent(ctx, pid),
 		})
 	}
 	return aggregateMemoryConsumers(samples, totalMemory), nil
+}
+
+func processCPUPercent(ctx context.Context, pid int32) float64 {
+	proc, err := process.NewProcess(pid)
+	if err != nil {
+		return 0
+	}
+	usage, err := proc.CPUPercentWithContext(ctx)
+	if err != nil || usage < 0 {
+		return 0
+	}
+	return usage
 }
 
 func aggregateMemoryConsumers(samples []processMemorySample, totalMemory uint64) []MemoryConsumer {
@@ -273,6 +291,7 @@ func aggregateMemoryConsumers(samples []processMemorySample, totalMemory uint64)
 		}
 		consumer.RSS += sample.rss
 		consumer.ProcessCount++
+		consumer.CPUPercent += sample.cpuPercent
 	}
 	consumers := make([]MemoryConsumer, 0, len(grouped))
 	for _, consumer := range grouped {

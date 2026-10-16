@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -69,7 +70,7 @@ func (a *application) styledSelect(
 	// 弹出面板：复刻 stylePanel 的样式。
 	sel.Popup(func(panel ui.Element) {
 		panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).
-			Radius(t.Radius + 2).Background(t.Background).Border(1, t.Border)
+			Radius(t.Radius+2).Background(t.Background).Border(1, t.Border)
 		panel.Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
 		for _, value := range values {
 			item := sel.Item(value).Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)
@@ -158,44 +159,19 @@ func mygoQuit() {
 
 func (a *application) panelHeader(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Height(54).Padding(9, 12).Gap(12).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
-			ui.Box(c).Size(26, 26).Radius(6).Background(ui.Hex("#2563EB")).Center().Children(func() {
-				ui.Icon(c, iconPulse).FontSize(15).TextColor(ui.RGB(255, 255, 255))
-			})
-			ui.Text(c, "Vitals").FontSize(15).Bold()
-		})
-		ui.Spacer(c)
-		ui.Segmented(c, &a.page, a.tr("tabs.status"), a.tr("tabs.memory"), a.tr("tabs.apps"), a.tr("tabs.settings")).
-			Label(a.tr("tabs.label")).
-			Shrink(0)
+	ui.Row(c).Height(48).Padding(0, 12).AlignItems(ui.End).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+		ui.Tabs(c, &a.page, a.tr("tabs.status"), a.tr("tabs.memory"), a.tr("tabs.apps"), a.tr("tabs.settings")).Grow(1)
 	})
 }
 
 func (a *application) overview(c *ui.Context) {
 	snapshot := a.snapshot
-	title, detail, attention := healthSummary(snapshot, a.startupItems, a.localizer)
-	accent := ui.Hex("#16A34A")
-	if attention {
-		accent = ui.Hex("#D97706")
-	}
-	section(c, func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(32, 32).Radius(7).Background(accent.Alpha(0.12)).Center().Children(func() {
-				ui.Icon(c, iconShield).FontSize(17).TextColor(accent)
-			})
-			ui.Column(c).MinWidth(0).Grow(1).Gap(2).Children(func() {
-				ui.Text(c, title).FontSize(14).Bold()
-				ui.Text(c, detail).FontSize(10).TextColor(c.Theme().TextMuted).SingleLine()
-			})
-		})
-	}).Padding(12)
-	ui.Grid(c).Columns(2).Gap(10).Children(func() {
-		metricCard(c, "CPU", fmt.Sprintf("%.0f%%", snapshot.CPUPercent), a.tr("overview.cpu_detail"), iconPulse, ui.Hex("#2563EB"), snapshot.HistoryCPU, 100)
-		metricCard(c, "RAM", fmt.Sprintf("%.0f%%", snapshot.MemoryPercent), formatBytes(snapshot.MemoryUsed), iconMemory, ui.Hex("#0F9F8F"), snapshot.HistoryMemory, 100)
-		metricCard(c, "GPU", fmt.Sprintf("%.0f%%", snapshot.GPUPercent), a.tr("overview.ram_detail"), iconGPU, ui.Hex("#D97706"), nil, 100)
-		metricCard(c, a.tr("overview.network_title"), "↓ "+compactRate(snapshot.NetworkDown), "↑ "+compactRate(snapshot.NetworkUp), iconNetwork, ui.Hex("#DB2777"), snapshot.HistoryNetwork, maxHistory(snapshot.HistoryNetwork))
+	ui.Grid(c).Columns(3).Gap(10).Children(func() {
+		realtimeMetric(c, "CPU", fmt.Sprintf("%.0f%%", snapshot.CPUPercent), a.tr("overview.cpu_detail"), iconPulse, ui.Hex("#2563EB"))
+		realtimeMetric(c, "RAM", fmt.Sprintf("%.0f%%", snapshot.MemoryPercent), formatBytes(snapshot.MemoryUsed), iconMemory, ui.Hex("#0F9F8F"))
+		realtimeMetric(c, "GPU", fmt.Sprintf("%.0f%%", snapshot.GPUPercent), a.tr("overview.ram_detail"), iconGPU, ui.Hex("#D97706"))
 	})
+	networkMetric(c, snapshot, a.tr("overview.network_title"))
 	section(c, func() {
 		t := c.Theme()
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
@@ -279,9 +255,9 @@ func batterySummary(c *ui.Context, battery core.BatteryInfo, tr i18n.Localizer) 
 	})
 }
 
-func metricCard(c *ui.Context, title, value, detail string, icon *ui.SVG, accent ui.Color, history []float64, ceiling float64) {
+func realtimeMetric(c *ui.Context, title, value, detail string, icon *ui.SVG, accent ui.Color) {
 	t := c.Theme()
-	ui.Column(c).Height(112).Padding(12).Gap(6).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
+	ui.Column(c).Height(96).Padding(12).Gap(7).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Size(26, 26).Radius(6).Background(accent.Alpha(0.12)).Center().Children(func() {
 				ui.Icon(c, icon).FontSize(15).TextColor(accent)
@@ -289,10 +265,23 @@ func metricCard(c *ui.Context, title, value, detail string, icon *ui.SVG, accent
 			ui.Text(c, title).FontSize(12).Bold().TextColor(t.TextMuted)
 		})
 		ui.Text(c, value).FontSize(21).Bold().FontFeatures("tnum").SingleLine()
-		ui.Row(c).AlignItems(ui.End).Children(func() {
-			ui.Text(c, detail).FontSize(10).TextColor(t.TextMuted).Grow(1).SingleLine()
-			sparkline(c, history, ceiling, accent).Size(48, 18)
+		ui.Text(c, detail).FontSize(10).TextColor(t.TextMuted).SingleLine()
+	})
+}
+
+func networkMetric(c *ui.Context, snapshot core.Snapshot, title string) {
+	t := c.Theme()
+	section(c, func() {
+		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(26, 26).Radius(6).Background(ui.Hex("#DB2777").Alpha(0.12)).Center().Children(func() {
+				ui.Icon(c, iconNetwork).FontSize(15).TextColor(ui.Hex("#DB2777"))
+			})
+			ui.Text(c, title).FontSize(12).Bold().TextColor(t.TextMuted)
+			ui.Spacer(c)
+			ui.Text(c, "↓ "+compactRate(snapshot.NetworkDown)).FontSize(12).FontFeatures("tnum").TextColor(ui.Hex("#2563EB"))
+			ui.Text(c, "↑ "+compactRate(snapshot.NetworkUp)).FontSize(12).FontFeatures("tnum").TextColor(ui.Hex("#0F9F8F"))
 		})
+		networkSparkline(c, snapshot.HistoryNetworkDown, snapshot.HistoryNetworkUp).Height(72)
 	})
 }
 
@@ -334,18 +323,21 @@ func (a *application) memory(c *ui.Context) {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("memory.by_app")).FontSize(14).Bold()
 			ui.Spacer(c)
-			ui.Text(c, a.trf("memory.top_items", len(snapshot.MemoryConsumers))).FontSize(11).TextColor(t.TextMuted)
+			a.styledSelect(c, &a.memorySort, a.tr("memory.sort"), []string{"memory", "cpu"}, func(value string) string {
+				return a.tr("memory.sort_" + value)
+			}, nil)
 		})
+		consumers := sortedMemoryConsumers(snapshot.MemoryConsumers, a.memorySort)
 		if a.memoryResult != "" {
 			ui.Text(c, a.memoryResult).FontSize(11).FontWeight(600).TextColor(ui.Hex("#16A34A"))
 		}
-		if len(snapshot.MemoryConsumers) == 0 {
+		if len(consumers) == 0 {
 			ui.Row(c).Gap(8).PaddingY(12).Children(func() {
 				ui.Spinner(c)
 				ui.Text(c, a.tr("memory.summarizing")).FontSize(12).TextColor(t.TextMuted)
 			})
 		}
-		for _, consumer := range snapshot.MemoryConsumers {
+		for _, consumer := range consumers {
 			consumer := consumer
 			name := a.localizedApplicationName(consumer.AppPath, consumer.Name)
 			ui.Column(c.Key("memory:" + consumer.AppPath + ":" + consumer.Name)).Gap(3).PaddingY(2).Children(func() {
@@ -357,7 +349,7 @@ func (a *application) memory(c *ui.Context) {
 					})
 					ui.Column(c).AlignItems(ui.End).Gap(1).Children(func() {
 						ui.Text(c, formatBytes(consumer.RSS)).FontSize(12).FontWeight(600).FontFeatures("tnum")
-						ui.Text(c, fmt.Sprintf("%.1f%%", consumer.Percent)).FontSize(10).TextColor(t.TextMuted).FontFeatures("tnum")
+						ui.Text(c, a.trf("memory.ram_cpu", consumer.Percent, consumer.CPUPercent)).FontSize(10).TextColor(t.TextMuted).FontFeatures("tnum")
 					})
 					if a.canReleaseApplicationMemory(consumer.AppPath) {
 						label := a.tr("memory.release")
@@ -371,10 +363,34 @@ func (a *application) memory(c *ui.Context) {
 							OnClick(func() { a.requestApplicationMemoryRelease(consumer) })
 					}
 				})
-				ui.Progress(c, min(consumer.Percent/100, 1)).Label(name+a.tr("memory.release")).Height(3)
+				ui.Progress(c, min(consumer.Percent/100, 1)).Label(name + a.tr("memory.release")).Height(3)
 			})
 		}
 	}).Padding(14).Gap(8)
+}
+
+func sortedMemoryConsumers(values []core.MemoryConsumer, sortBy string) []core.MemoryConsumer {
+	consumers := slices.Clone(values)
+	slices.SortStableFunc(consumers, func(a, b core.MemoryConsumer) int {
+		switch sortBy {
+		case "cpu":
+			if a.CPUPercent != b.CPUPercent {
+				if a.CPUPercent > b.CPUPercent {
+					return -1
+				}
+				return 1
+			}
+		default:
+			if a.RSS != b.RSS {
+				if a.RSS > b.RSS {
+					return -1
+				}
+				return 1
+			}
+		}
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return consumers
 }
 
 func (a *application) settingsView(c *ui.Context) {
@@ -395,30 +411,6 @@ func (a *application) settingsView(c *ui.Context) {
 		a.metricSetting(c, "GPU", a.tr("settings.gpu_detail"), &a.settings.ShowGPU)
 		a.metricSetting(c, a.tr("overview.network_title"), a.tr("settings.network_detail"), &a.settings.ShowNetwork)
 	}).Padding(14).Gap(8)
-
-	section(c, func() {
-		ui.Text(c, a.tr("settings.health_alerts")).FontSize(14).Bold()
-		settingsRow(c, a.tr("settings.sustained"), a.tr("settings.sustained_detail"), func() {
-			if ui.Switch(c, &a.settings.Alerts).Label(a.tr("settings.sustained")).Changed() {
-				a.health.Reset()
-				a.persistSettings()
-			}
-		})
-		if a.settings.Alerts {
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				status := a.notificationResult
-				if status == "" {
-					status = a.tr("settings.notify_permission")
-				}
-				ui.Text(c, status).FontSize(10).TextColor(t.TextMuted).Grow(1)
-				label := a.tr("settings.test_alert")
-				if a.testingNotification {
-					label = a.tr("settings.test_sending")
-				}
-				ui.Button(c, label).Disabled(a.testingNotification).OnClick(a.testHealthNotification)
-			})
-		}
-	}).Padding(14).Gap(10)
 
 	section(c, func() {
 		ui.Text(c, a.tr("settings.update_appearance")).FontSize(14).Bold()
@@ -582,7 +574,22 @@ func (a *application) uninstaller(c *ui.Context) {
 func (a *application) uninstallerList(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().MinHeight(0).Gap(10).Children(func() {
-		ui.Text(c, a.tr("apps.title")).FontSize(15).Bold()
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("apps.title")).FontSize(15).Bold()
+			ui.Spacer(c)
+			ui.Button(c, "").
+				Label(a.tr("apps.refresh")).
+				Tooltip(a.tr("apps.refresh_tooltip")).
+				Disabled(a.loadingApps).
+				Children(func() {
+					if a.loadingApps {
+						ui.Spinner(c)
+					} else {
+						ui.Icon(c, iconRefresh).FontSize(15)
+					}
+				}).
+				OnClick(a.refreshApplications)
+		})
 		ui.TextInput(c, &a.appQuery).Label(a.tr("apps.search_label")).Placeholder(a.tr("apps.search_placeholder"))
 		if a.loadingApps {
 			ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
@@ -761,19 +768,124 @@ func sparkline(c *ui.Context, values []float64, ceiling float64, accent ui.Color
 		if len(values) < 2 || ceiling <= 0 {
 			return
 		}
-		var path ui.Path
+		const inset = float32(6)
+		graphWidth := rect.W - inset*2
+		graphHeight := rect.H - inset*2
+		var line, area ui.Path
 		for index, value := range values {
-			x := rect.X + 4 + float32(index)/float32(len(values)-1)*(rect.W-8)
+			x := rect.X + inset + float32(index)/float32(len(values)-1)*graphWidth
 			normalized := float32(math.Min(1, math.Max(0, value/ceiling)))
-			y := rect.Y + rect.H - 4 - normalized*(rect.H-8)
+			y := rect.Y + rect.H - inset - normalized*graphHeight
 			if index == 0 {
-				path.MoveTo(x, y)
+				line.MoveTo(x, y)
+				area.MoveTo(x, rect.Y+rect.H-inset)
+				area.LineTo(x, y)
 			} else {
-				path.LineTo(x, y)
+				line.LineTo(x, y)
+				area.LineTo(x, y)
 			}
 		}
-		p.StrokePath(&path, 2, accent)
+		lastX := rect.X + rect.W - inset
+		area.LineTo(lastX, rect.Y+rect.H-inset).Close()
+		p.Line(rect.X+inset, rect.Y+rect.H/2, lastX, rect.Y+rect.H/2, 1, t.Border.Alpha(0.35))
+		p.Line(rect.X+inset, rect.Y+rect.H-inset, lastX, rect.Y+rect.H-inset, 1, t.Border.Alpha(0.5))
+		p.FillPath(&area, accent.Alpha(0.14))
+		p.StrokePath(&line, 2.5, accent)
 	})
+}
+
+func networkSparkline(c *ui.Context, down, up []float64) ui.Element {
+	t := c.Theme()
+	ceiling := max(maxHistory(down), maxHistory(up))
+	chart := ui.Box(c).MinWidth(40).Background(t.Border.Alpha(0.16)).Radius(5)
+	x, _, over := chart.PointerPosition()
+	hoverIndex := -1
+	if over {
+		hoverIndex = networkHoverIndex(x, chart.Bounds().W, len(down), len(up))
+	}
+	chart.Draw(func(p *ui.Painter, rect ui.Rect) {
+		const inset = float32(6)
+		graphWidth := rect.W - inset*2
+		graphHeight := rect.H - inset*2
+		lastX := rect.X + rect.W - inset
+		p.Line(rect.X+inset, rect.Y+rect.H/2, lastX, rect.Y+rect.H/2, 1, t.Border.Alpha(0.35))
+		p.Line(rect.X+inset, rect.Y+rect.H-inset, lastX, rect.Y+rect.H-inset, 1, t.Border.Alpha(0.5))
+		draw := func(values []float64, accent ui.Color) {
+			if len(values) < 2 {
+				return
+			}
+			var line, area ui.Path
+			for index, value := range values {
+				x := rect.X + inset + float32(index)/float32(len(values)-1)*graphWidth
+				normalized := float32(math.Min(1, math.Max(0, value/ceiling)))
+				y := rect.Y + rect.H - inset - normalized*graphHeight
+				if index == 0 {
+					line.MoveTo(x, y)
+					area.MoveTo(x, rect.Y+rect.H-inset)
+					area.LineTo(x, y)
+				} else {
+					line.LineTo(x, y)
+					area.LineTo(x, y)
+				}
+			}
+			area.LineTo(lastX, rect.Y+rect.H-inset).Close()
+			p.FillPath(&area, accent.Alpha(0.1))
+			p.StrokePath(&line, 2.5, accent)
+		}
+		draw(down, ui.Hex("#2563EB"))
+		draw(up, ui.Hex("#0F9F8F"))
+		if hoverIndex >= 0 {
+			hoverX := rect.X + inset + float32(hoverIndex)/float32(max(len(down), len(up))-1)*graphWidth
+			p.Line(hoverX, rect.Y+inset, hoverX, rect.Y+rect.H-inset, 1, t.TextMuted.Alpha(0.55))
+			drawHoverPoint(p, rect, down, hoverIndex, ceiling, inset, ui.Hex("#2563EB"))
+			drawHoverPoint(p, rect, up, hoverIndex, ceiling, inset, ui.Hex("#0F9F8F"))
+		}
+	})
+	if tooltip := networkTooltip(down, up, hoverIndex); tooltip != "" {
+		chart.Tooltip(tooltip)
+	}
+	return chart
+}
+
+func networkHoverIndex(x float32, width float32, downCount, upCount int) int {
+	count := max(downCount, upCount)
+	const inset = float32(6)
+	graphWidth := width - inset*2
+	if count < 2 || graphWidth <= 0 || x < inset || x > width-inset {
+		return -1
+	}
+	index := int(math.Round(float64((x - inset) / graphWidth * float32(count-1))))
+	return min(count-1, max(0, index))
+}
+
+func networkTooltip(down, up []float64, index int) string {
+	if index < 0 || index >= max(len(down), len(up)) {
+		return ""
+	}
+	var downRate, upRate uint64
+	if index < len(down) {
+		downRate = uint64(max(0, down[index]))
+	}
+	if index < len(up) {
+		upRate = uint64(max(0, up[index]))
+	}
+	return fmt.Sprintf("下载 %s\n上传 %s", formatRate(downRate), formatRate(upRate))
+}
+
+func drawHoverPoint(p *ui.Painter, rect ui.Rect, values []float64, index int, ceiling float64, inset float32, accent ui.Color) {
+	if index < 0 || index >= len(values) || len(values) < 2 {
+		return
+	}
+	graphWidth := rect.W - inset*2
+	graphHeight := rect.H - inset*2
+	x := rect.X + inset + float32(index)/float32(len(values)-1)*graphWidth
+	normalized := float32(math.Min(1, math.Max(0, values[index]/ceiling)))
+	y := rect.Y + rect.H - inset - normalized*graphHeight
+	var outer, inner ui.Path
+	outer.Circle(x, y, 4)
+	inner.Circle(x, y, 2)
+	p.FillPath(&outer, accent)
+	p.FillPath(&inner, ui.RGBA(255, 255, 255, 1))
 }
 
 func maxHistory(values []float64) float64 {

@@ -13,7 +13,6 @@ func TestSettingsRoundTrip(t *testing.T) {
 		ShowRAM:     false,
 		ShowGPU:     true,
 		ShowNetwork: false,
-		Alerts:      true,
 		RefreshRate: "5s",
 	}
 	if err := saveSettings(path, want); err != nil {
@@ -25,7 +24,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if got.ShowCPU != want.ShowCPU || got.ShowRAM != want.ShowRAM ||
 		got.ShowGPU != want.ShowGPU || got.ShowNetwork != want.ShowNetwork ||
-		got.Alerts != want.Alerts || got.RefreshRate != want.RefreshRate {
+		got.RefreshRate != want.RefreshRate {
 		t.Fatalf("settings = %+v, want %+v", got, want)
 	}
 	if got.refreshInterval() != 5*time.Second {

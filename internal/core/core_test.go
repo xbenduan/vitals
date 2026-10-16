@@ -18,6 +18,7 @@ func TestRelatedConfidence(t *testing.T) {
 	}{
 		{"dev.example.app", "high", true},
 		{"dev.example.app.savedState", "high", true},
+		{"app", "", false},
 		{"Example App", "medium", true},
 		{"Example App.log", "medium", true},
 		{"example", "", false},
@@ -28,6 +29,60 @@ func TestRelatedConfidence(t *testing.T) {
 		if got != test.want || matched != test.wantMatch {
 			t.Errorf("relatedConfidence(%q) = %q, %v; want %q, %v", test.name, got, matched, test.want, test.wantMatch)
 		}
+	}
+}
+
+func TestRelatedConfidenceUsesBundleLeafForNestedSupportFolders(t *testing.T) {
+	app := AppInfo{Name: "Google Chrome", BundleID: "com.google.Chrome"}
+	if confidence, matched := relatedConfidence("Chrome", app); !matched || confidence != confidenceHigh {
+		t.Fatalf("Chrome = %q, %v; want high, true", confidence, matched)
+	}
+}
+
+func TestUpdaterConfidenceProtectsSharedVendorComponents(t *testing.T) {
+	app := AppInfo{Name: "Google Chrome", BundleID: "com.google.Chrome"}
+	path := "/Users/example/Library/Application Support/Google/GoogleUpdater"
+	if confidence, matched := updaterConfidence(path, app, false); !matched || confidence != confidenceHigh {
+		t.Fatalf("exclusive updater = %q, %v; want high, true", confidence, matched)
+	}
+	if confidence, matched := updaterConfidence(path, app, true); !matched || confidence != confidenceMedium {
+		t.Fatalf("shared updater = %q, %v; want medium, true", confidence, matched)
+	}
+}
+
+func TestUpdaterConfidenceRejectsUnrelatedUpdater(t *testing.T) {
+	app := AppInfo{Name: "Google Chrome", BundleID: "com.google.Chrome"}
+	if confidence, matched := updaterConfidence("/Library/Application Support/Microsoft/Updater", app, false); matched {
+		t.Fatalf("unrelated updater = %q, true; want no match", confidence)
+	}
+}
+
+func TestLaunchItemConfidenceUsesProgramPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "LaunchAgents", "opaque.agent.plist")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>opaque.agent</string>
+<key>ProgramArguments</key><array>
+<string>/Applications/Example.app/Contents/MacOS/helper</string>
+</array>
+</dict></plist>`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := AppInfo{Name: "Example", Path: "/Applications/Example.app", BundleID: "dev.example.app"}
+	if confidence, matched := launchItemConfidence(path, app); !matched || confidence != confidenceHigh {
+		t.Fatalf("launch item = %q, %v; want high, true", confidence, matched)
+	}
+}
+
+func TestQuitApplicationAcceptsUnregisteredBundleID(t *testing.T) {
+	err := QuitApplication(t.Context(), AppInfo{Name: "Missing", BundleID: "dev.vitals.missing-test-app"})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -157,8 +212,11 @@ func TestProtectedLibraryPath(t *testing.T) {
 	if !protectedLibraryPath("/Users/example/Library/Containers/dev.example.app", home) {
 		t.Fatal("container path should be protected")
 	}
-	if protectedLibraryPath("/Users/example/Library/Caches/dev.example.app", home) {
-		t.Fatal("cache path should not be protected")
+	if !protectedLibraryPath("/Users/example/Library/Application Support/Example", home) {
+		t.Fatal("application support path should be protected")
+	}
+	if protectedLibraryPath("/Users/example/Documents/Example", home) {
+		t.Fatal("documents path should not be protected")
 	}
 }
 

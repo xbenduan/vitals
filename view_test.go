@@ -20,6 +20,19 @@ func TestFilteredAppIndices(t *testing.T) {
 	}
 }
 
+func TestSortedMemoryConsumers(t *testing.T) {
+	consumers := []core.MemoryConsumer{
+		{Name: "Memory Heavy", RSS: 200, CPUPercent: 4},
+		{Name: "CPU Heavy", RSS: 100, CPUPercent: 18},
+	}
+	if got := sortedMemoryConsumers(consumers, "memory"); got[0].Name != "Memory Heavy" {
+		t.Fatalf("memory sort = %q, want Memory Heavy", got[0].Name)
+	}
+	if got := sortedMemoryConsumers(consumers, "cpu"); got[0].Name != "CPU Heavy" {
+		t.Fatalf("cpu sort = %q, want CPU Heavy", got[0].Name)
+	}
+}
+
 func TestFullDiskAccessErrorOffersSettings(t *testing.T) {
 	app := newApplication()
 	app.showActionError(&core.FullDiskAccessError{Path: "/protected"})
@@ -87,6 +100,9 @@ func TestUninstallerNavigatesBetweenListAndDetail(t *testing.T) {
 	if !tester.HasText("Example") {
 		t.Fatalf("list texts = %q", tester.Texts())
 	}
+	if _, ok := tester.Find("刷新应用列表"); !ok {
+		t.Fatal("app list refresh button not found")
+	}
 	app.selectedApp = 0
 	tester.Frame()
 	if !tester.HasText("应用健康档案") {
@@ -103,17 +119,16 @@ func TestUninstallerNavigatesBetweenListAndDetail(t *testing.T) {
 func TestPanelHeaderAndPages(t *testing.T) {
 	app := newApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	brand, ok := tester.Find("Vitals")
-	if !ok {
-		t.Fatal("brand not found")
-	}
 	statusTab, ok := tester.Find("状态")
-	if !ok || statusTab.X <= brand.X+brand.W {
-		t.Fatalf("brand = %+v, status tab = %+v", brand, statusTab)
+	if !ok || statusTab.X < 8 {
+		t.Fatalf("status tab = %+v", statusTab)
 	}
 	settingsTab, ok := tester.Find("设置")
 	if !ok || settingsTab.X+settingsTab.W >= panelWidth-8 {
 		t.Fatalf("settings tab = %+v", settingsTab)
+	}
+	if tester.HasText("Vitals") {
+		t.Fatal("brand should not be rendered in the tab header")
 	}
 	if slices.Contains(tester.Texts(), "启动") {
 		t.Fatal("startup management should not be a top-level page")
@@ -130,7 +145,7 @@ func TestPanelHeaderAndPages(t *testing.T) {
 
 	app.page = 3
 	tester.Frame()
-	for _, text := range []string{"登录时启动", "状态栏", "健康提醒", "持续异常提醒", "刷新频率", "退出 Vitals"} {
+	for _, text := range []string{"登录时启动", "状态栏", "刷新频率", "退出 Vitals"} {
 		if !tester.HasText(text) {
 			t.Fatalf("settings page missing %q: %q", text, tester.Texts())
 		}
@@ -155,7 +170,7 @@ func TestOverviewShowsBatteryAndStartupHealth(t *testing.T) {
 		},
 	}
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"建议检查", "电池 78% · 已连接电源", "健康度约 91% · 120 次循环", "启动项健康", "2 个启动项 · 1 个需关注", "系统管理"} {
+	for _, text := range []string{"电池 78% · 已连接电源", "健康度约 91% · 120 次循环", "启动项健康", "2 个启动项 · 1 个需关注", "系统管理"} {
 		if !tester.HasText(text) {
 			t.Fatalf("overview missing %q: %q", text, tester.Texts())
 		}
@@ -203,18 +218,6 @@ func TestApplicationHealthProfileCombinesExistingData(t *testing.T) {
 	}
 }
 
-func TestSettingsShowsNotificationTestWhenEnabled(t *testing.T) {
-	app := newApplication()
-	app.page = 3
-	app.settings.Alerts = true
-	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"持续异常提醒", "首次发送时由 macOS 请求通知权限", "测试提醒"} {
-		if !tester.HasText(text) {
-			t.Fatalf("notification setting missing %q: %q", text, tester.Texts())
-		}
-	}
-}
-
 func TestStartupCounts(t *testing.T) {
 	items := []core.StartupItem{
 		{Enabled: true},
@@ -224,5 +227,30 @@ func TestStartupCounts(t *testing.T) {
 	enabled, review := startupCounts(items)
 	if enabled != 2 || review != 2 {
 		t.Fatalf("startup counts = %d enabled / %d review", enabled, review)
+	}
+}
+
+func TestNetworkHoverIndex(t *testing.T) {
+	if got := networkHoverIndex(6, 106, 5, 5); got != 0 {
+		t.Fatalf("left edge index = %d, want 0", got)
+	}
+	if got := networkHoverIndex(56, 106, 5, 5); got != 2 {
+		t.Fatalf("middle index = %d, want 2", got)
+	}
+	if got := networkHoverIndex(100, 106, 5, 5); got != 4 {
+		t.Fatalf("right edge index = %d, want 4", got)
+	}
+	if got := networkHoverIndex(20, 106, 1, 1); got != -1 {
+		t.Fatalf("single-point index = %d, want -1", got)
+	}
+}
+
+func TestNetworkTooltip(t *testing.T) {
+	got := networkTooltip([]float64{1024}, []float64{2048}, 0)
+	if got != "下载 1.0 KB/s\n上传 2.0 KB/s" {
+		t.Fatalf("tooltip = %q", got)
+	}
+	if got := networkTooltip(nil, nil, 0); got != "" {
+		t.Fatalf("empty tooltip = %q", got)
 	}
 }

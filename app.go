@@ -43,6 +43,7 @@ type application struct {
 	localizer    i18n.Localizer
 
 	pendingMemory core.MemoryConsumer
+	memorySort    string
 	confirmMemory bool
 	releasingApp  string
 	memoryResult  string
@@ -66,10 +67,6 @@ type application struct {
 	startupLoaded  bool
 	startupLoading bool
 	startupError   string
-
-	health              healthMonitor
-	testingNotification bool
-	notificationResult  string
 }
 
 const (
@@ -83,6 +80,7 @@ func newApplication() *application {
 	app := &application{
 		sampler:       core.NewSampler(),
 		selectedApp:   -1,
+		memorySort:    "memory",
 		loadingApps:   true,
 		appIcons:      make(map[string]*ui.Bitmap),
 		iconRequested: make(map[string]bool),
@@ -225,11 +223,6 @@ func (a *application) sampleLoop() {
 			a.snapshot = snapshot
 			_ = a.tray.SetIcon(menuBarStatusImage(snapshot, a.settings), true)
 			a.tray.SetToolTip(menuBarToolTip(snapshot, a.settings, a.localizer))
-			if a.settings.Alerts {
-				for _, alert := range a.health.Observe(snapshot, time.Now(), a.localizer) {
-					go a.showHealthAlert(alert)
-				}
-			}
 		})
 		timer := time.NewTimer(time.Duration(a.sampleEvery.Load()))
 		<-timer.C
@@ -250,6 +243,15 @@ func (a *application) loadApplications() {
 			a.showActionError(err)
 		}
 	})
+}
+
+func (a *application) refreshApplications() {
+	if a.loadingApps {
+		return
+	}
+	a.loadingApps = true
+	go a.loadApplications()
+	a.refreshStartupItems()
 }
 
 // requestAppIcon 在首次渲染某个应用时异步转换其图标，期间界面显示占位头像。
@@ -285,12 +287,17 @@ func (a *application) selectApplication(index int) {
 	}
 	a.scanningRelated = true
 	app := a.apps[index]
+	activeDataPath := ""
+	if a.settingsPath != "" {
+		activeDataPath = filepath.Dir(a.settingsPath)
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		sizeDone := make(chan uint64, 1)
 		go func() { sizeDone <- core.BundleSize(app.Path) }()
 		files, err := core.ScanRelatedFiles(ctx, app)
+		files = excludeRelatedPath(files, activeDataPath)
 		size := <-sizeDone
 		a.win.Update(func() {
 			a.scanningRelated = false
@@ -313,50 +320,20 @@ func (a *application) selectApplication(index int) {
 	}()
 }
 
-func (a *application) showHealthAlert(alert healthAlert) {
-	if !mygo.NotificationsSupported() {
-		return
+func excludeRelatedPath(files []core.RelatedFile, excluded string) []core.RelatedFile {
+	if excluded == "" {
+		return files
 	}
-	notification := mygo.NewNotification(mygo.NotificationOptions{
-		ID:    alert.ID,
-		Group: "health",
-		Title: alert.Title,
-		Body:  alert.Message,
-	})
-	if err := notification.Show(); err != nil && !errors.Is(err, mygo.ErrNotificationsDenied) {
-		log.Println("show health alert:", err)
+	excluded = filepath.Clean(excluded)
+	filtered := files[:0]
+	for _, file := range files {
+		path := filepath.Clean(file.Path)
+		if path == excluded || strings.HasPrefix(path, excluded+string(filepath.Separator)) {
+			continue
+		}
+		filtered = append(filtered, file)
 	}
-}
-
-func (a *application) testHealthNotification() {
-	if a.testingNotification {
-		return
-	}
-	a.testingNotification = true
-	a.notificationResult = ""
-	go func() {
-		err := mygo.NewNotification(mygo.NotificationOptions{
-			ID:    "health-test",
-			Group: "health",
-			Title: a.tr("alert.test_title"),
-			Body:  a.tr("alert.test_body"),
-		}).Show()
-		a.win.Update(func() {
-			a.testingNotification = false
-			if err != nil {
-				a.showActionError(fmt.Errorf("send test alert: %w", err))
-				return
-			}
-			a.notificationResult = a.tr("alert.test_sent")
-		})
-	}()
-}
-
-func (a *application) openHealthNotification(string) {
-	a.page = 0
-	if a.win != nil {
-		a.showWindow()
-	}
+	return filtered
 }
 
 func (a *application) requestApplicationMemoryRelease(consumer core.MemoryConsumer) {

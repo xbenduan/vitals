@@ -16,7 +16,6 @@ type appSettings struct {
 	ShowRAM     bool   `json:"showRAM"`
 	ShowGPU     bool   `json:"showGPU"`
 	ShowNetwork bool   `json:"showNetwork"`
-	Alerts      bool   `json:"alerts"`
 	RefreshRate string `json:"refreshRate"`
 	Language    string `json:"language"`
 }
