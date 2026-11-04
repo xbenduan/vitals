@@ -3,10 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
-	"slices"
-	"strings"
-	"time"
 
 	"vitals/internal/clipboard"
 	"vitals/internal/translation"
@@ -32,154 +28,119 @@ func (a *application) translateEntry(entry clipboard.Entry) {
 	a.translationMode = true
 	a.editDraft = ""
 	a.translating = true
-	cfg, seq := a.settings.Translation, a.translationSequence
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	a.translationCancel = cancel
-	if a.win == nil {
-		cancel()
-		a.finishTranslation(seq, entry.ID, "", "", errors.New("模型服务尚未就绪"))
+	seq := a.translationSequence
+	client, err := translation.New(a.settings.Translation)
+	if err != nil {
+		a.finishTranslation(seq, entry.ID, "", err)
 		return
 	}
+	if a.win == nil {
+		a.finishTranslation(seq, entry.ID, "", errors.New("翻译服务尚未就绪"))
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.translationCancel = cancel
 	go func() {
 		defer cancel()
-		client, err := translation.New(cfg)
-		if err == nil && cfg.Model == "" {
-			var models []string
-			models, err = client.Models(ctx)
-			if err == nil {
-				cfg.Model = models[0]
-				client, err = translation.New(cfg)
-			}
-		}
-		var text string
-		if err == nil {
-			text, err = client.Translate(ctx, entry.Text)
-		}
-		a.win.Update(func() { a.finishTranslation(seq, entry.ID, text, cfg.Model, err) })
+		text, err := client.Translate(ctx, entry.Text)
+		a.win.Update(func() { a.finishTranslation(seq, entry.ID, text, err) })
 	}()
 }
 
-func (a *application) finishTranslation(seq uint64, id, text, model string, err error) {
+func translationErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "翻译已取消，可重试"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "翻译超时，请检查网络后重试"
+	default:
+		return err.Error()
+	}
+}
+
+func (a *application) finishTranslation(seq uint64, id, text string, err error) {
 	if a.quitting || seq != a.translationSequence || !a.translationMode || a.detail == nil || a.detail.ID != id {
 		return
 	}
 	a.translating = false
 	a.translationCancel = nil
 	if err != nil {
-		switch {
-		case errors.Is(err, context.Canceled):
-			a.translationError = "翻译已取消，可重试"
-		case errors.Is(err, context.DeadlineExceeded):
-			a.translationError = "翻译超时，请重试或更换较小的模型"
-		default:
-			a.translationError = err.Error()
-		}
+		a.translationError = translationErrorMessage(err)
 		return
-	}
-	if a.settings.Translation.Model == "" && model != "" {
-		a.settings.Translation.Model = model
-		a.translationDraft = a.settings.Translation
-		a.persistSettings()
 	}
 	a.editDraft = text
 	a.translationError = ""
 	a.editorHandle.Focus()
 }
 
-func (a *application) cancelModelDetection() {
-	a.modelSequence++
-	if a.modelCancel != nil {
-		a.modelCancel()
-		a.modelCancel = nil
+func (a *application) cancelTranslationCheck() {
+	a.translationCheckSequence++
+	if a.translationCheckCancel != nil {
+		a.translationCheckCancel()
+		a.translationCheckCancel = nil
 	}
-	if a.detectingModels {
-		a.modelStatus = "检测已取消，可重试"
+	if a.checkingTranslation {
+		a.translationStatus = "连接测试已取消"
 	}
-	a.detectingModels = false
+	a.checkingTranslation = false
 }
 
-func (a *application) detectModels(startup bool) {
-	a.cancelModelDetection()
+func (a *application) testTranslationConnection() {
+	a.cancelTranslationCheck()
 	cfg := a.translationDraft
-	client, err := translation.New(cfg)
+	probe := cfg
+	probe.TargetLanguage = translation.TargetChinese
+	client, err := translation.New(probe)
 	if err != nil {
-		a.modelStatus = err.Error()
+		a.translationStatus = err.Error()
 		return
 	}
 	if a.win == nil {
 		return
 	}
-	a.detectingModels = true
-	a.modelStatus = "正在连接模型服务…"
-	seq := a.modelSequence
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	a.modelCancel = cancel
+	a.checkingTranslation = true
+	a.translationStatus = "正在测试连接…"
+	seq := a.translationCheckSequence
+	ctx, cancel := context.WithCancel(context.Background())
+	a.translationCheckCancel = cancel
 	go func() {
 		defer cancel()
-		models, err := client.Models(ctx)
-		a.win.Update(func() {
-			if a.quitting || seq != a.modelSequence || cfg != a.translationDraft {
-				return
-			}
-			a.detectingModels = false
-			a.modelCancel = nil
-			if err != nil {
-				a.modelStatus = err.Error()
-				return
-			}
-			a.models = models
-			if a.translationDraft.Model == "" {
-				a.translationDraft.Model = models[0]
-			}
-			a.modelStatus = fmt.Sprintf("已连接 · 找到 %d 个模型", len(models))
-			if startup && a.settings.Translation == cfg && cfg.Model == "" {
-				a.settings.Translation.Model = a.translationDraft.Model
-				a.persistSettings()
-			}
-		})
+		// A fixed sample tests detection and translation without reading the clipboard.
+		_, err := client.Translate(ctx, "Hello, world!")
+		a.win.Update(func() { a.finishTranslationCheck(seq, cfg, err) })
 	}()
 }
 
-func (a *application) changeTranslationDraft() {
-	a.cancelModelDetection()
-	a.models = nil
-	a.modelStatus = ""
+func (a *application) finishTranslationCheck(seq uint64, cfg translation.Config, err error) {
+	if a.quitting || seq != a.translationCheckSequence || cfg != a.translationDraft {
+		return
+	}
+	a.checkingTranslation = false
+	a.translationCheckCancel = nil
+	if err != nil {
+		a.translationStatus = translationErrorMessage(err)
+		return
+	}
+	a.translationStatus = "连接成功 · 测试译文已返回"
 }
 
-func (a *application) changeProvider() {
-	a.changeTranslationDraft()
-	a.translationDraft.Model = ""
-	a.translationDraft.APIKey = ""
-	if a.translationDraft.Provider == translation.Ollama {
-		a.translationDraft.BaseURL = translation.Default().BaseURL
-	} else {
-		a.translationDraft.BaseURL = "http://127.0.0.1:1234/v1"
-	}
+func (a *application) changeTranslationDraft() {
+	a.cancelTranslationCheck()
+	a.translationStatus = ""
 }
 
 func (a *application) saveTranslationSettings() {
-	cfg := a.translationDraft
-	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	cfg.Model = strings.TrimSpace(cfg.Model)
-	if _, err := translation.New(cfg); err != nil {
-		a.modelStatus = err.Error()
-		return
+	cfg := a.translationDraft.WithDefaults()
+	// Allow clearing both credentials to disconnect the account.
+	if cfg.User != "" || cfg.Token != "" {
+		if _, err := translation.New(cfg); err != nil {
+			a.translationStatus = err.Error()
+			return
+		}
 	}
-	if cfg.Model == "" {
-		a.modelStatus = "请先检测或填写模型名称"
-		return
-	}
-	a.cancelModelDetection()
+	a.cancelTranslationCheck()
 	a.settings.Translation = cfg
 	a.translationDraft = cfg
 	a.persistSettings()
-	a.modelStatus = "翻译配置已保存"
-}
-
-func (a *application) modelOptions() []string {
-	models := slices.Clone(a.models)
-	if a.translationDraft.Model != "" && !slices.Contains(models, a.translationDraft.Model) {
-		models = append([]string{a.translationDraft.Model}, models...)
-	}
-	return models
+	a.translationStatus = "翻译配置已保存"
 }

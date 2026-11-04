@@ -136,7 +136,7 @@ func (a *application) back() {
 	case a.saving:
 		return
 	case a.settingsOpen:
-		a.cancelModelDetection()
+		a.cancelTranslationCheck()
 		a.settingsOpen = false
 		a.setRecording(false)
 	case a.detail != nil:

@@ -60,17 +60,16 @@ type application struct {
 	confirmDelete bool
 	deleteID      string
 
-	translationDraft    translation.Config
-	translationMode     bool
-	translating         bool
-	translationError    string
-	translationCancel   context.CancelFunc
-	translationSequence uint64
-	models              []string
-	detectingModels     bool
-	modelStatus         string
-	modelCancel         context.CancelFunc
-	modelSequence       uint64
+	translationDraft         translation.Config
+	translationMode          bool
+	translating              bool
+	translationError         string
+	translationCancel        context.CancelFunc
+	translationSequence      uint64
+	checkingTranslation      bool
+	translationStatus        string
+	translationCheckCancel   context.CancelFunc
+	translationCheckSequence uint64
 
 	images         map[string]*ui.Bitmap
 	imageRequested map[string]bool
@@ -110,8 +109,10 @@ func (a *application) ready() {
 	}
 	// Keep the old system-monitor settings separate from the clipboard app.
 	a.settingsPath = filepath.Join(dir, "clipboard-settings.json")
+	settingsLoaded := false
 	if settings, err := config.Load(a.settingsPath); err == nil {
 		a.settings = settings
+		settingsLoaded = true
 	} else {
 		a.message = err.Error()
 	}
@@ -154,10 +155,11 @@ func (a *application) ready() {
 		a.shortcutActive = a.settings.Shortcut
 	}
 	go a.diskLoop(filepath.Join(dir, "Clipboard"))
-	go a.monitorLoop()
-	if a.settings.Translation.Provider == translation.Ollama && a.settings.Translation.Model == "" {
-		a.detectModels(true)
+	if settingsLoaded {
+		// Persist the normalized schema to remove obsolete translation settings.
+		a.persistSettings()
 	}
+	go a.monitorLoop()
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.shutdown() })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		mygo.GlobalShortcut.UnregisterAll()
@@ -256,7 +258,7 @@ func (a *application) shutdown() {
 	a.quitting = true
 	a.cancelPending()
 	a.cancelTranslation()
-	a.cancelModelDetection()
+	a.cancelTranslationCheck()
 	close(a.done)
 	close(a.jobs)
 	// Jobs only post asynchronous UI updates, so the main thread can safely

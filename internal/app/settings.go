@@ -10,10 +10,9 @@ import (
 func (a *application) openSettings() {
 	a.cancelPending()
 	a.cancelTranslation()
-	a.cancelModelDetection()
+	a.cancelTranslationCheck()
 	a.translationDraft = a.settings.Translation
-	a.models = nil
-	a.modelStatus = ""
+	a.translationStatus = ""
 	a.settingsTab = 0
 	a.settingsOpen = true
 	a.setRecording(false)

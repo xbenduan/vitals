@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"vitals/internal/clipboard"
+	"vitals/internal/translation"
 
 	"github.com/egoist/mygo"
 )
@@ -74,14 +75,40 @@ func TestTranslationCancellationRejectsStaleResult(t *testing.T) {
 	if ctx.Err() != context.Canceled || app.translating {
 		t.Fatal("hiding must cancel the translation request")
 	}
-	app.finishTranslation(sequence, "one", "stale", "", nil)
+	app.finishTranslation(sequence, "one", "stale", nil)
 	if app.editDraft != "原文" {
 		t.Fatal("a canceled translation must not update its editor")
 	}
 	app.openEntry(entry)
-	app.finishTranslation(sequence, "one", "stale", "", nil)
+	app.finishTranslation(sequence, "one", "stale", nil)
 	if app.translationMode || app.editDraft != "原文" {
 		t.Fatal("a stale request must not replace a new editor for the same entry")
+	}
+}
+
+func TestTranslationCheckCancellationRejectsStaleConfiguration(t *testing.T) {
+	app := newApplication()
+	cfg := translation.Config{User: "test-user", Token: "test-token", TargetLanguage: translation.TargetAuto}
+	app.translationDraft = cfg
+	app.checkingTranslation = true
+	ctx, cancel := context.WithCancel(context.Background())
+	app.translationCheckCancel = cancel
+	seq := app.translationCheckSequence
+	app.translationDraft.Token = "replacement"
+	app.changeTranslationDraft()
+	app.finishTranslationCheck(seq, cfg, nil)
+	if ctx.Err() != context.Canceled || app.checkingTranslation || app.translationStatus != "" {
+		t.Fatal("editing credentials must cancel the test and discard its result")
+	}
+	app.checkingTranslation = true
+	ctx, cancel = context.WithCancel(context.Background())
+	app.translationCheckCancel = cancel
+	seq = app.translationCheckSequence
+	cfg = app.translationDraft
+	app.hideWindow()
+	app.finishTranslationCheck(seq, cfg, nil)
+	if ctx.Err() != context.Canceled || app.checkingTranslation || app.translationStatus != "连接测试已取消" {
+		t.Fatal("hiding must cancel the test and reject its late result")
 	}
 }
 

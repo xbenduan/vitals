@@ -12,7 +12,7 @@ func (a *application) handleWindowClose(event *mygo.CloseEvent) {
 func (a *application) hideWindow() {
 	a.cancelPending()
 	a.cancelTranslation()
-	a.cancelModelDetection()
+	a.cancelTranslationCheck()
 	a.setRecording(false)
 	if a.win != nil {
 		a.win.Hide()

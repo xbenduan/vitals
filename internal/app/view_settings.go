@@ -22,7 +22,13 @@ func (a *application) settingsView(c *ui.Context) {
 				button.TextColor(muted)
 			}
 			button.Children(func() { ui.Text(c, label).FontSize(12).FontWeight(600) }).
-				OnClick(func() { a.setRecording(false); a.settingsTab = i })
+				OnClick(func() {
+					a.setRecording(false)
+					if i != 1 {
+						a.cancelTranslationCheck()
+					}
+					a.settingsTab = i
+				})
 		}
 	})
 	if a.settingsTab == 1 {
@@ -97,57 +103,83 @@ func (a *application) translationSettingsView(c *ui.Context) {
 	ui.Scroll(c.Key("translation-settings")).Grow(1).MinHeight(0).Padding(0, 16, 10).Gap(10).Children(func() {
 		settingsGroup(c, func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-				ui.Text(c, "模型服务").FontSize(12).FontWeight(600).Grow(1)
-				ui.Select(c.Key("provider"), &a.translationDraft.Provider, []string{translation.Ollama, translation.OpenAI}).
-					Width(195).Height(30).Label("翻译服务").OnChange(a.changeProvider)
-			})
-			ui.TextInput(c.Key("base-url"), &a.translationDraft.BaseURL).Height(31).
-				Label("服务地址").Placeholder("服务地址").OnChange(a.changeTranslationDraft)
-			help := "Ollama 默认在本机运行，无需 API Key"
-			if a.translationDraft.Provider == translation.OpenAI {
-				help = "兼容 OpenAI 的服务地址需包含 /v1 等 API 前缀"
-			}
-			ui.Text(c, help).FontSize(10).TextColor(muted)
-			if a.translationDraft.Provider == translation.OpenAI {
-				ui.TextInput(c.Key("api-key"), &a.translationDraft.APIKey).Password().Height(31).
-					Label("API Key").Placeholder("API Key（本地服务可留空）").OnChange(a.changeTranslationDraft)
-			}
-			ui.Row(c).Gap(7).Children(func() {
-				ui.TextInput(c.Key("model"), &a.translationDraft.Model).Grow(1).MinWidth(0).Height(31).
-					Label("模型名称").Placeholder("模型名称，或点击检测").OnChange(func() {
-					a.cancelModelDetection()
-					a.modelStatus = ""
+				ui.Column(c).Gap(3).Grow(1).Children(func() {
+					ui.Text(c, "腾讯交互翻译").FontSize(13).FontWeight(600)
+					ui.Text(c, "TranSmart API").FontSize(10).TextColor(muted)
 				})
-				ui.Button(c, "检测模型").Height(31).Disabled(a.detectingModels).OnClick(func() { a.detectModels(false) })
+				services := c.Services()
+				ui.Button(c, "获取凭据").Height(28).OnClick(func() { services.OpenURL("https://transmart.qq.com/") })
 			})
-			if len(a.models) > 0 {
-				ui.Select(c.Key("detected-model"), &a.translationDraft.Model, a.modelOptions()).Height(30).
-					Label("已安装模型").OnChange(func() { a.cancelModelDetection(); a.modelStatus = "" })
-			}
+			ui.Divider(c).Margin(2, 0)
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "User").FontSize(11).Width(40)
+				ui.TextInput(c.Key("transmart-user"), &a.translationDraft.User).Grow(1).MinWidth(0).Height(32).
+					Label("开发者 User").Placeholder("开发者账号 User").OnChange(a.changeTranslationDraft)
+			})
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Token").FontSize(11).Width(40)
+				ui.TextInput(c.Key("transmart-token"), &a.translationDraft.Token).Password().Grow(1).MinWidth(0).Height(32).
+					Label("开发者 Token").Placeholder("粘贴 API Token").OnChange(a.changeTranslationDraft)
+			})
+			ui.Text(c, "在腾讯交互翻译的个人中心获取 User 和 Token。").FontSize(10).TextColor(muted)
 		})
 		settingsGroup(c, func() {
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "翻译提示词").FontSize(12).FontWeight(600).Grow(1)
-				ui.Button(c, "恢复提示词").Height(26).OnClick(func() {
-					a.translationDraft.Prompt = translation.DefaultPrompt
-					a.cancelModelDetection()
-					a.modelStatus = ""
-				})
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, "目标语言").FontSize(12).FontWeight(600).Grow(1)
+				a.translationLanguageSelect(c)
 			})
-			ui.TextArea(c.Key("translation-prompt"), &a.translationDraft.Prompt).Height(137).Padding(9).FontSize(11).
-				Label("自定义翻译提示词").OnChange(func() { a.cancelModelDetection(); a.modelStatus = "" })
-			ui.Text(c, "每次翻译自动注入；默认中英互译，保留前端术语与代码。").FontSize(10).TextColor(muted)
+			ui.Text(c, "自动互译：中文 → 英文，其他语言 → 简体中文。").FontSize(10).TextColor(muted)
+			ui.Text(c, "单次最多 5,000 字符，译文可继续编辑。").FontSize(10).TextColor(muted)
+		})
+		ui.Column(c).Padding(2, 4).Gap(6).Children(func() {
+			ui.Text(c, "主动翻译时，所选原文会发送到腾讯交互翻译。").FontSize(10).TextColor(muted)
+			ui.Text(c, "连接测试仅发送示例文字；凭据保存在本机设置中。").FontSize(10).TextColor(muted)
 		})
 	})
-	ui.Row(c).Padding(0, 16, 12).AlignItems(ui.Center).Gap(9).Shrink(0).Children(func() {
-		if a.detectingModels {
-			ui.Spinner(c).Size(15, 15)
+	ui.Column(c).Padding(0, 16, 12).Gap(8).Shrink(0).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
+			if a.checkingTranslation {
+				ui.Spinner(c).Size(14, 14)
+			}
+			status := a.translationStatus
+			if status == "" {
+				status = "修改后保存，下一次翻译生效"
+			}
+			ui.Text(c, status).FontSize(10).TextColor(muted).Grow(1).MinWidth(0).MaxLines(3)
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Button(c, "测试连接").Height(31).Disabled(a.checkingTranslation).OnClick(a.testTranslationConnection)
+			ui.Spacer(c)
+			ui.PrimaryButton(c, "保存翻译配置").Height(31).OnClick(a.saveTranslationSettings)
+		})
+	})
+}
+
+func (a *application) translationLanguageSelect(c *ui.Context) {
+	options := []struct{ value, label string }{
+		{translation.TargetAuto, "自动互译"},
+		{translation.TargetChinese, "简体中文"},
+		{translation.TargetEnglish, "英文"},
+	}
+	sel := ui.SelectBase(c.Key("target-language"), &a.translationDraft.TargetLanguage)
+	sel.Trigger.Width(160).Height(30).Padding(0, 10).Radius(7).Border(1, hairline).
+		Background(ui.Hex("#FFFFFF")).AlignItems(ui.Center).Gap(10).Label("选择目标语言").
+		OnChange(a.changeTranslationDraft).Children(func() {
+		for _, option := range options {
+			if option.value == a.translationDraft.TargetLanguage {
+				ui.Text(c, option.label).FontSize(11).Grow(1)
+			}
 		}
-		status := a.modelStatus
-		if status == "" {
-			status = "修改后保存，下一次翻译生效"
+		ui.Text(c, "⌄").FontSize(12).TextColor(muted)
+	})
+	sel.Popup(func(panel ui.Element) {
+		panel.Padding(4).Radius(8).Border(1, hairline).Background(ui.Hex("#FFFFFF"))
+		for _, option := range options {
+			item := sel.Item(option.value).Padding(7, 10).Radius(5).Label(option.label)
+			if item.Highlighted() {
+				item.Background(lavender).TextColor(accent)
+			}
+			item.Children(func() { ui.Text(c, option.label).FontSize(11) })
 		}
-		ui.Text(c, status).FontSize(10).TextColor(muted).Grow(1).MinWidth(0).MaxLines(3)
-		ui.PrimaryButton(c, "保存翻译配置").Height(31).OnClick(a.saveTranslationSettings)
 	})
 }

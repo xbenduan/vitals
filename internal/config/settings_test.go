@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"vitals/internal/translation"
@@ -12,8 +13,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	want := Settings{Shortcut: "Command+Option+Space", HistoryLimit: 1000, Paused: true, OpenAtLogin: true}
 	want.Translation = translation.Config{
-		Provider: translation.OpenAI, BaseURL: "http://localhost:1234/v1",
-		Model: "local-model", APIKey: "example-key", Prompt: "Translate code comments.",
+		User: "example-user", Token: "example-token", TargetLanguage: translation.TargetEnglish,
 	}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -23,11 +23,15 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Shortcut != want.Shortcut || got.HistoryLimit != 1000 || !got.Paused || got.OpenAtLogin || got.Translation != want.Translation {
-		t.Fatalf("unexpected round trip: %+v", got)
+		t.Fatal("preferences did not survive a round trip")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("credentials require an owner-only settings file: %v", err)
 	}
 }
 
-func TestExistingPreferencesGainLocalTranslationDefaults(t *testing.T) {
+func TestExistingPreferencesGainTranslationDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"shortcut":"Command+Option+K","historyLimit":100,"paused":true}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -35,6 +39,33 @@ func TestExistingPreferencesGainLocalTranslationDefaults(t *testing.T) {
 	got, err := Load(path)
 	if err != nil || got.Shortcut != "Command+Option+K" || got.HistoryLimit != 100 || !got.Paused || got.Translation != translation.Default() {
 		t.Fatalf("migration = %+v, %v", got, err)
+	}
+}
+
+func TestOldTranslationCredentialsAreNotReused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{
+		"shortcut":"Command+Option+K","historyLimit":100,"paused":true,
+		"translation":{"provider":"OpenAI compatible","baseURL":"http://localhost:1234/v1",
+		"model":"local","apiKey":"old-secret","prompt":"custom","thinking":true}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.Translation != translation.Default() || got.Shortcut != "Command+Option+K" || got.HistoryLimit != 100 || !got.Paused {
+		t.Fatalf("translation migration failed: %v", err)
+	}
+	if err := Save(path, got); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"provider", "baseURL", "model", "apiKey", "old-secret", "prompt", "thinking"} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("obsolete translation field %q survived saving", key)
+		}
 	}
 }
 

@@ -23,7 +23,7 @@ func (a *application) detailView(c *ui.Context) {
 				case a.translating:
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Spinner(c).Size(14, 14)
-						ui.Text(c, "正在翻译，首次加载模型可能稍慢…").FontSize(11).TextColor(accent).Grow(1)
+						ui.Text(c, "正在通过腾讯交互翻译…").FontSize(11).TextColor(accent).Grow(1)
 						ui.Button(c, "停止").OnClick(a.cancelTranslation)
 					})
 				case a.translationError != "":

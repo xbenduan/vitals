@@ -207,7 +207,7 @@ func TestTranslationSettingsAndEditableResult(t *testing.T) {
 	if !app.translationMode || !tester.HasText("翻译结果") {
 		t.Fatal("translate must reuse the editor")
 	}
-	app.finishTranslation(app.translationSequence, "one", "Keep the idea close.", "", nil)
+	app.finishTranslation(app.translationSequence, "one", "Keep the idea close.", nil)
 	tester.Frame()
 	_ = tester.Click("编辑内容")
 	tester.Key(ui.Cmd, ui.KeyA)
@@ -219,28 +219,76 @@ func TestTranslationSettingsAndEditableResult(t *testing.T) {
 	_ = tester.Click("返回历史")
 	_ = tester.Click("设置")
 	_ = tester.Click("翻译")
-	for _, label := range []string{"模型服务", "翻译提示词", "检测模型", "保存翻译配置"} {
+	for _, label := range []string{"腾讯交互翻译", "User", "Token", "目标语言", "测试连接", "保存翻译配置"} {
 		if !tester.HasText(label) {
 			t.Fatalf("missing translation setting %q", label)
 		}
 	}
-	_ = tester.Click("模型名称")
-	tester.Type("local-model")
-	_ = tester.Click("自定义翻译提示词")
-	tester.Key(ui.Cmd, ui.KeyA)
-	tester.Type("Translate frontend documentation.")
+	_ = tester.Click("测试连接")
+	if !tester.HasText("请在翻译设置中填写") {
+		t.Fatal("connection testing must explain missing credentials")
+	}
+	_ = tester.Click("开发者 User")
+	tester.Type(" test-user ")
+	_ = tester.Click("开发者 Token")
+	tester.Type(" test-token ")
 	tester.Frame()
-	if app.settings.Translation.Model != "" {
+	tester.Frame()
+	if app.settings.Translation.User != "" || app.settings.Translation.Token != "" {
 		t.Fatal("draft must not apply before saving")
 	}
-	_ = tester.Click("保存翻译配置")
-	if app.settings.Translation.Model != "local-model" || app.settings.Translation.Prompt != "Translate frontend documentation." {
-		t.Fatalf("translation settings must persist both model and prompt: model=%q prompt=%q status=%q",
-			app.settings.Translation.Model, app.settings.Translation.Prompt, app.modelStatus)
+	if err := tester.Click("选择目标语言"); err != nil {
+		t.Fatal(err)
 	}
-	_ = tester.Click("恢复提示词")
-	if app.translationDraft.Prompt != translation.DefaultPrompt {
-		t.Fatal("restore must recover the frontend translation prompt")
+	if err := tester.Click("英文"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if app.translationDraft.TargetLanguage != translation.TargetEnglish || app.settings.Translation.TargetLanguage != translation.TargetAuto {
+		t.Fatal("target language must remain a draft before saving")
+	}
+	_ = tester.Click("保存翻译配置")
+	if app.settings.Translation.User != "test-user" || app.settings.Translation.Token != "test-token" || app.settings.Translation.TargetLanguage != translation.TargetEnglish {
+		t.Fatalf("translation settings must apply normalized credentials and target: status=%q", app.translationStatus)
+	}
+	_ = tester.Click("通用")
+	tester.Frame()
+	_ = tester.Click("翻译")
+	tester.Frame()
+	_ = tester.Click("开发者 Token")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Type("unsaved")
+	_ = tester.Click("返回历史")
+	_ = tester.Click("设置")
+	_ = tester.Click("翻译")
+	if app.translationDraft.Token != "test-token" {
+		t.Fatal("reopening settings must discard an unsaved credential edit")
+	}
+	_ = tester.Click("获取凭据")
+	if urls := tester.OpenedURLs(); len(urls) != 1 || urls[0] != "https://transmart.qq.com/" {
+		t.Fatalf("credential page=%v", urls)
+	}
+}
+
+func TestTranslationSettingsCanDisconnectAccount(t *testing.T) {
+	app := previewApplication()
+	app.settings.Translation = translation.Config{User: "user", Token: "token", TargetLanguage: translation.TargetAuto}
+	app.openSettings()
+	app.settingsTab = 1
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	_ = tester.Click("开发者 Token")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(0, ui.KeyBackspace)
+	_ = tester.Click("保存翻译配置")
+	if app.settings.Translation.Token != "token" || !tester.HasText("填写腾讯交互翻译") {
+		t.Fatal("partial credentials must not replace a valid configuration")
+	}
+	_ = tester.Click("开发者 User")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(0, ui.KeyBackspace)
+	_ = tester.Click("保存翻译配置")
+	if app.settings.Translation.User != "" || app.settings.Translation.Token != "" {
+		t.Fatal("clearing both fields must disconnect the account")
 	}
 }
 
@@ -286,13 +334,10 @@ func TestRenderClipboardStates(t *testing.T) {
 	tester.Frame()
 	save("settings")
 	app.settingsTab = 1
-	app.translationDraft.Model = "Ornith-1.5-9B-GGUF:latest"
+	app.translationDraft.User = "developer@example.com"
+	app.translationDraft.Token = "example-token-for-preview"
 	tester.Frame()
 	save("translation-settings")
-	app.translationDraft.Provider = translation.OpenAI
-	app.translationDraft.BaseURL = "http://127.0.0.1:1234/v1"
-	tester.Frame()
-	save("openai-settings")
 	app.settingsOpen = false
 	app.openEntry(app.entries[0])
 	tester.Frame()
