@@ -7,27 +7,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
-
-	"vitals/internal/core"
 )
-
-func TestCompactRate(t *testing.T) {
-	tests := []struct {
-		value uint64
-		want  string
-	}{
-		{0, "0B/s"},
-		{7400, "7.2KB/s"},
-		{1048473, "1024KB/s"},
-		{1258291, "1.2m/s"},
-		{1288490189, "1.2g/s"},
-	}
-	for _, test := range tests {
-		if got := compactRate(test.value); got != test.want {
-			t.Errorf("compactRate(%d) = %q, want %q", test.value, got, test.want)
-		}
-	}
-}
 
 func TestDevelopmentUserDataPath(t *testing.T) {
 	appData := "/Users/example/Library/Application Support"
@@ -39,45 +19,13 @@ func TestDevelopmentUserDataPath(t *testing.T) {
 	}
 }
 
-func TestExcludeRelatedPathProtectsActiveApplicationData(t *testing.T) {
-	active := "/Users/example/Library/Application Support/Vitals Dev"
-	files := []core.RelatedFile{
-		{Path: active},
-		{Path: filepath.Join(active, "settings.json")},
-		{Path: "/Users/example/Library/Application Support/Vitals"},
-	}
-	got := excludeRelatedPath(files, active)
-	if len(got) != 1 || got[0].Path != "/Users/example/Library/Application Support/Vitals" {
-		t.Fatalf("filtered related files = %#v", got)
-	}
-}
-
-func TestMenuBarStatusImageSizeIsStable(t *testing.T) {
-	for _, snapshot := range []core.Snapshot{
-		{},
-		{GPUPercent: 18, CPUPercent: 20, MemoryPercent: 82, NetworkDown: 1258291, NetworkUp: 7400},
-	} {
-		image, err := png.Decode(bytes.NewReader(menuBarStatusImage(snapshot, defaultSettings())))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := image.Bounds().Size(); got.X != 274 || got.Y != 36 {
-			t.Fatalf("image size = %v, want 274x36", got)
-		}
-	}
-}
-
-func TestMenuBarStatusImageShrinksWithVisibleMetrics(t *testing.T) {
-	settings := defaultSettings()
-	settings.ShowGPU = false
-	settings.ShowRAM = false
-	settings.ShowNetwork = false
-	image, err := png.Decode(bytes.NewReader(menuBarStatusImage(core.Snapshot{CPUPercent: 20}, settings)))
+func TestMenuBarIcon(t *testing.T) {
+	img, err := png.Decode(bytes.NewReader(menuBarIcon()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := image.Bounds().Size(); got.X != 58 || got.Y != 36 {
-		t.Fatalf("image size = %v, want 58x36", got)
+	if img.Bounds().Dx() != 36 || img.Bounds().Dy() != 36 {
+		t.Fatalf("unexpected tray size: %v", img.Bounds())
 	}
 }
 
@@ -86,13 +34,27 @@ func TestWindowCloseAllowsApplicationQuit(t *testing.T) {
 	ordinaryClose := &mygo.CloseEvent{}
 	app.handleWindowClose(ordinaryClose)
 	if !ordinaryClose.DefaultPrevented() {
-		t.Fatal("ordinary window close should hide the window")
+		t.Fatal("ordinary close must hide the window")
 	}
-
 	app.quitting = true
 	quitClose := &mygo.CloseEvent{}
 	app.handleWindowClose(quitClose)
 	if quitClose.DefaultPrevented() {
-		t.Fatal("application quit should be allowed to close the window")
+		t.Fatal("quit must be allowed to close the window")
+	}
+}
+
+func TestOpeningDetailsCancelsPendingPaste(t *testing.T) {
+	app := newApplication()
+	before := app.actionSequence
+	app.clickEntry(clipEntry{ID: "first", Kind: kindText, Text: "hello"}, 0)
+	clickSequence := app.actionSequence
+	app.openEntry(clipEntry{ID: "first", Kind: kindText, Text: "hello"})
+	if before >= clickSequence || app.actionSequence <= clickSequence || app.detail == nil || app.editDraft != "hello" {
+		t.Fatal("double click must invalidate the first click and open the editor")
+	}
+	app.hideWindow()
+	if app.actionSequence <= clickSequence+1 {
+		t.Fatal("hiding the panel must invalidate pending paste work")
 	}
 }

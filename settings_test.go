@@ -3,18 +3,11 @@ package main
 import (
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSettingsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	want := appSettings{
-		ShowCPU:     true,
-		ShowRAM:     false,
-		ShowGPU:     true,
-		ShowNetwork: false,
-		RefreshRate: "5s",
-	}
+	want := appSettings{Shortcut: "Command+Option+Space", HistoryLimit: 1000, Paused: true, OpenAtLogin: true}
 	if err := saveSettings(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -22,23 +15,33 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ShowCPU != want.ShowCPU || got.ShowRAM != want.ShowRAM ||
-		got.ShowGPU != want.ShowGPU || got.ShowNetwork != want.ShowNetwork ||
-		got.RefreshRate != want.RefreshRate {
-		t.Fatalf("settings = %+v, want %+v", got, want)
-	}
-	if got.refreshInterval() != 5*time.Second {
-		t.Fatalf("refresh interval = %s", got.refreshInterval())
+	if got.Shortcut != want.Shortcut || got.HistoryLimit != 1000 || !got.Paused || got.OpenAtLogin {
+		t.Fatalf("unexpected round trip: %+v", got)
 	}
 }
 
-func TestSettingsAlwaysKeepOneMetric(t *testing.T) {
-	settings := appSettings{RefreshRate: "invalid"}
-	settings.normalize()
-	if settings.visibleMetricCount() != 4 {
-		t.Fatalf("visible metric count = %d, want 4", settings.visibleMetricCount())
+func TestMissingSettingsHaveDefaultShortcut(t *testing.T) {
+	got, err := loadSettings(filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil || got.Shortcut != defaultShortcut || got.HistoryLimit != 500 || got.Paused {
+		t.Fatalf("defaults = %+v, %v", got, err)
 	}
-	if settings.RefreshRate != "2s" {
-		t.Fatalf("refresh rate = %q, want 2s", settings.RefreshRate)
+}
+
+func TestShortcutValidation(t *testing.T) {
+	for input, want := range map[string]string{
+		"cmd+shift+v":    "Command+Shift+V",
+		"alt+ctrl+space": "Control+Option+Space",
+		"Command+F12":    "Command+F12",
+		" Command + , ":  "Command+,",
+	} {
+		got, err := normalizeShortcut(input)
+		if err != nil || got != want {
+			t.Fatalf("%q => %q, %v; want %q", input, got, err, want)
+		}
+	}
+	for _, invalid := range []string{"V", "Shift+V", "Command+", "Whatever+V", "Command+NoSuchKey"} {
+		if _, err := normalizeShortcut(invalid); err == nil {
+			t.Fatalf("accepted invalid shortcut %q", invalid)
+		}
 	}
 }

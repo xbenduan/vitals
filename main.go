@@ -14,7 +14,6 @@ func main() {
 	mygo.App.SetName("Vitals")
 	configureDevelopmentUserData()
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { app.quitting = true })
 	mygo.App.WhenReady(app.ready)
 	mygo.App.OnWindowAllClosed(func() {})
 	if err := mygo.App.Run(); err != nil {

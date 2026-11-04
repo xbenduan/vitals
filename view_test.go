@@ -1,256 +1,177 @@
 package main
 
 import (
-	"slices"
+	"image/png"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
-
-	"vitals/internal/core"
 )
 
-func TestFilteredAppIndices(t *testing.T) {
-	apps := []core.AppInfo{
-		{Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"},
-		{Name: "Safari", BundleID: "com.apple.Safari"},
-	}
-	got := filteredApplications(apps, "microsoft")
-	if len(got) != 1 || got[0] != 0 {
-		t.Fatalf("filtered indices = %v, want [0]", got)
-	}
-}
-
-func TestSortedMemoryConsumers(t *testing.T) {
-	consumers := []core.MemoryConsumer{
-		{Name: "Memory Heavy", RSS: 200, CPUPercent: 4},
-		{Name: "CPU Heavy", RSS: 100, CPUPercent: 18},
-	}
-	if got := sortedMemoryConsumers(consumers, "memory"); got[0].Name != "Memory Heavy" {
-		t.Fatalf("memory sort = %q, want Memory Heavy", got[0].Name)
-	}
-	if got := sortedMemoryConsumers(consumers, "cpu"); got[0].Name != "CPU Heavy" {
-		t.Fatalf("cpu sort = %q, want CPU Heavy", got[0].Name)
-	}
-}
-
-func TestFullDiskAccessErrorOffersSettings(t *testing.T) {
+func previewApplication() *application {
 	app := newApplication()
-	app.showActionError(&core.FullDiskAccessError{Path: "/protected"})
-	if !app.errorOpen || !app.errorSettings {
-		t.Fatalf("error state = open %v, settings %v; want both true", app.errorOpen, app.errorSettings)
+	app.loading = false
+	at := time.Date(2026, 11, 4, 14, 23, 8, 0, time.Local)
+	app.entries = []clipEntry{
+		{ID: "one", Kind: kindText, Text: "把灵感留在手边，随时接着写。", Source: "备忘录", CopiedAt: at},
+		{ID: "two", Kind: kindText, Text: "Command + Shift + V，找回刚刚复制的内容", Source: "TRAE CN", CopiedAt: at.Add(-time.Minute), Favorite: true},
+		{ID: "three", Kind: kindFiles, Files: []string{"/Users/example/Documents/项目计划.pdf"}, Source: "Finder", CopiedAt: at.Add(-3 * time.Minute)},
+		{ID: "four", Kind: kindText, Text: "https://go.dev/doc/", Source: "Safari", CopiedAt: at.Add(-5 * time.Minute)},
+		{ID: "five", Kind: kindText, Text: "周五 15:00 · 产品方案讨论\n记得带上新的界面草稿。", Source: "飞书", CopiedAt: at.Add(-8 * time.Minute), Favorite: true},
+		{ID: "six", Kind: kindText, Text: "func main() { fmt.Println(\"Hello, clipboard\") }", Source: "TRAE CN", CopiedAt: at.Add(-11 * time.Minute)},
 	}
-	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	if !tester.HasText("需要完全磁盘访问") || !tester.HasText("打开设置") {
-		t.Fatalf("dialog texts = %q", tester.Texts())
-	}
+	app.target = pasteTarget{PID: 1234, Name: "备忘录"}
+	return app
 }
 
-func TestSelectedFiles(t *testing.T) {
-	app := core.AppInfo{
-		Size: 100,
-		Related: []core.RelatedFile{
-			{Size: 20, Selected: true},
-			{Size: 30, Selected: false},
-		},
-	}
-	if got := selectedFileCount(app); got != 2 {
-		t.Fatalf("selected count = %d, want 2", got)
-	}
-	if got := selectedBytes(app); got != 120 {
-		t.Fatalf("selected bytes = %d, want 120", got)
-	}
-}
-
-func TestApplicationMemoryReleaseRequiresConfirmation(t *testing.T) {
-	app := newApplication()
-	app.page = 1
-	app.loadingApps = false
-	app.apps = []core.AppInfo{{
-		Name:     "飞书",
-		Path:     "/Applications/Lark.app",
-		BundleID: "com.larksuite.suite",
-	}}
-	app.snapshot.MemoryConsumers = []core.MemoryConsumer{{
-		Name:         "Lark",
-		AppPath:      "/Applications/Lark.app",
-		RSS:          2 * 1024 * 1024 * 1024,
-		ProcessCount: 15,
-		Percent:      6.3,
-	}}
+func TestCompactPanelSearchAndTabs(t *testing.T) {
+	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	if err := tester.Click("飞书释放"); err != nil {
+	for _, text := range []string{"Vitals", "正在监听", "全部", "文字", "文件", "收藏", "2026-11-04 14:23:08"} {
+		if !tester.HasText(text) {
+			t.Fatalf("missing %q: %q", text, tester.Texts())
+		}
+	}
+	if err := tester.Click("文件"); err != nil {
 		t.Fatal(err)
 	}
-	if !app.confirmMemory || !tester.HasText("退出并释放") {
-		t.Fatalf("confirmation = %v, texts = %q", app.confirmMemory, tester.Texts())
+	if !tester.HasText("项目计划.pdf") || tester.HasText("把灵感留在手边") {
+		t.Fatalf("file filter failed: %q", tester.Texts())
 	}
-}
-
-func TestUninstallerNavigatesBetweenListAndDetail(t *testing.T) {
-	app := newApplication()
-	app.page = 2
-	app.loadingApps = false
-	app.apps = []core.AppInfo{{
-		Name:     "Example",
-		Path:     "/Applications/Example.app",
-		BundleID: "dev.example.app",
-		Scanned:  true,
-	}}
-	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	if !tester.HasText("Example") {
-		t.Fatalf("list texts = %q", tester.Texts())
-	}
-	if _, ok := tester.Find("刷新应用列表"); !ok {
-		t.Fatal("app list refresh button not found")
-	}
-	app.selectedApp = 0
-	tester.Frame()
-	if !tester.HasText("应用健康档案") {
-		t.Fatalf("detail texts = %q", tester.Texts())
-	}
-	if err := tester.Click("返回应用列表"); err != nil {
+	if err := tester.Click("收藏"); err != nil {
 		t.Fatal(err)
 	}
-	if app.selectedApp != -1 || !tester.HasText("Example") {
-		t.Fatalf("selected app = %d, texts = %q", app.selectedApp, tester.Texts())
+	if !tester.HasText("Command + Shift + V") || tester.HasText("项目计划.pdf") {
+		t.Fatalf("favorite filter failed: %q", tester.Texts())
+	}
+	_ = tester.Click("全部")
+	_ = tester.Click("搜索剪贴板")
+	tester.Type("Safari")
+	if !tester.HasText("https://go.dev/doc/") || tester.HasText("把灵感留在手边") {
+		t.Fatalf("search failed: %q", tester.Texts())
+	}
+	tester.Frame()
+	if app.query != "Safari" {
+		t.Fatalf("search binding did not survive a rebuild: %q", app.query)
 	}
 }
 
-func TestPanelHeaderAndPages(t *testing.T) {
-	app := newApplication()
+func TestEditorSurvivesRebuildAndCancel(t *testing.T) {
+	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	statusTab, ok := tester.Find("状态")
-	if !ok || statusTab.X < 8 {
-		t.Fatalf("status tab = %+v", statusTab)
+	tester.Key(ui.Cmd, ui.KeyE)
+	if app.detail == nil || !tester.HasText("编辑文字") {
+		t.Fatal("keyboard editing did not open")
 	}
-	settingsTab, ok := tester.Find("设置")
-	if !ok || settingsTab.X+settingsTab.W >= panelWidth-8 {
-		t.Fatalf("settings tab = %+v", settingsTab)
-	}
-	if tester.HasText("Vitals") {
-		t.Fatal("brand should not be rendered in the tab header")
-	}
-	if slices.Contains(tester.Texts(), "启动") {
-		t.Fatal("startup management should not be a top-level page")
-	}
-
-	app.page = 1
+	_ = tester.Click("编辑内容")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Type("修改后的内容\n第二行")
 	tester.Frame()
-	if !tester.HasText("按应用占用") {
-		t.Fatalf("memory texts = %q", tester.Texts())
-	}
-	if tester.HasText("最近 60 秒") {
-		t.Fatal("memory page still contains the 60-second section")
-	}
-
-	app.page = 3
 	tester.Frame()
-	for _, text := range []string{"登录时启动", "状态栏", "刷新频率", "退出 Vitals"} {
-		if !tester.HasText(text) {
-			t.Fatalf("settings page missing %q: %q", text, tester.Texts())
-		}
+	if app.editDraft != "修改后的内容\n第二行" {
+		t.Fatalf("edit binding lost: %q", app.editDraft)
+	}
+	_ = tester.Click("取消")
+	tester.Frame()
+	if app.detail != nil || app.entries[0].Text != "把灵感留在手边，随时接着写。" {
+		t.Fatal("cancel must keep the original entry")
 	}
 }
 
-func TestOverviewShowsBatteryAndStartupHealth(t *testing.T) {
-	app := newApplication()
-	app.loadingApps = false
-	app.startupLoaded = true
-	app.startupItems = []core.StartupItem{
-		{Enabled: true},
-		{Enabled: true, NeedsReview: true},
-	}
-	app.snapshot = core.Snapshot{
-		Battery: core.BatteryInfo{
-			Present:       true,
-			ChargePercent: 78,
-			HealthPercent: 91,
-			CycleCount:    120,
-			ExternalPower: true,
-		},
-	}
+func TestDoubleClickOpensEditorBeforeSecondRelease(t *testing.T) {
+	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"电池 78% · 已连接电源", "健康度约 91% · 120 次循环", "启动项健康", "2 个启动项 · 1 个需关注", "系统管理"} {
-		if !tester.HasText(text) {
-			t.Fatalf("overview missing %q: %q", text, tester.Texts())
-		}
-	}
-	for _, removed := range []string{"磁盘体检", "应用管理"} {
-		if slices.Contains(tester.Texts(), removed) {
-			t.Fatalf("overview still contains removed shortcut %q: %q", removed, tester.Texts())
-		}
-	}
-	if err := tester.Click("系统管理"); err != nil {
+	if err := tester.Click("记录 one"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.OpenedURLs(); !slices.Equal(got, []string{startupSettingsURL}) {
-		t.Fatalf("opened URLs = %q, want %q", got, []string{startupSettingsURL})
+	sequence := app.actionSequence
+	if err := tester.Click("记录 one"); err != nil {
+		t.Fatal(err)
+	}
+	if app.detail == nil || app.detail.ID != "one" || app.actionSequence <= sequence {
+		t.Fatalf("double click did not open editor and cancel paste: detail=%+v", app.detail)
+	}
+	tester.Frame()
+	tester.Frame()
+	if !tester.HasText("编辑文字") {
+		t.Fatal("editor disappeared after double click")
 	}
 }
 
-func TestApplicationHealthProfileCombinesExistingData(t *testing.T) {
-	app := newApplication()
-	app.page = 2
-	app.loadingApps = false
-	app.selectedApp = 0
-	app.apps = []core.AppInfo{{
-		Name:       "Example",
-		Path:       "/Applications/Example.app",
-		BundleID:   "dev.example.app",
-		Size:       1024,
-		TotalBytes: 2048,
-		Scanned:    true,
-	}}
-	app.snapshot.MemoryConsumers = []core.MemoryConsumer{{
-		AppPath:      "/Applications/Example.app",
-		RSS:          4096,
-		ProcessCount: 2,
-	}}
-	app.startupItems = []core.StartupItem{{
-		AppPath: "/Applications/Example.app",
-		Enabled: true,
-	}}
+func TestSettingsAndShortcutRecording(t *testing.T) {
+	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"应用健康档案", "常驻内存", "2 个进程", "启动项", "共 1 项", "系统管理", "磁盘占用"} {
+	_ = tester.Click("设置")
+	for _, text := range []string{"打开剪贴板", "自动粘贴", "保留历史", "登录时启动", "退出 Vitals"} {
 		if !tester.HasText(text) {
-			t.Fatalf("profile missing %q: %q", text, tester.Texts())
+			t.Fatalf("missing settings control %q", text)
 		}
 	}
-}
-
-func TestStartupCounts(t *testing.T) {
-	items := []core.StartupItem{
-		{Enabled: true},
-		{Enabled: true, NeedsReview: true},
-		{NeedsReview: true},
+	_ = tester.Click("录制")
+	tester.Key(ui.Cmd|ui.Alt, ui.KeyK)
+	if app.recording || app.shortcutDraft != "Command+Option+K" {
+		t.Fatalf("recorded shortcut = %q, recording %v", app.shortcutDraft, app.recording)
 	}
-	enabled, review := startupCounts(items)
-	if enabled != 2 || review != 2 {
-		t.Fatalf("startup counts = %d enabled / %d review", enabled, review)
+	_ = tester.Click("打开辅助功能设置")
+	if got := tester.OpenedURLs(); len(got) != 1 || got[0] != accessibilityURL {
+		t.Fatalf("permission URL = %q", got)
 	}
-}
-
-func TestNetworkHoverIndex(t *testing.T) {
-	if got := networkHoverIndex(6, 106, 5, 5); got != 0 {
-		t.Fatalf("left edge index = %d, want 0", got)
-	}
-	if got := networkHoverIndex(56, 106, 5, 5); got != 2 {
-		t.Fatalf("middle index = %d, want 2", got)
-	}
-	if got := networkHoverIndex(100, 106, 5, 5); got != 4 {
-		t.Fatalf("right edge index = %d, want 4", got)
-	}
-	if got := networkHoverIndex(20, 106, 1, 1); got != -1 {
-		t.Fatalf("single-point index = %d, want -1", got)
+	tester.Key(0, ui.KeyEscape)
+	tester.Frame()
+	if app.settingsOpen || !tester.HasText("最近复制") {
+		t.Fatal("settings must return to clipboard")
 	}
 }
 
-func TestNetworkTooltip(t *testing.T) {
-	got := networkTooltip([]float64{1024}, []float64{2048}, 0)
-	if got != "下载 1.0 KB/s\n上传 2.0 KB/s" {
-		t.Fatalf("tooltip = %q", got)
+func TestKeyboardSelectionAndPause(t *testing.T) {
+	app := previewApplication()
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	_ = tester.Click("搜索剪贴板")
+	tester.Key(0, ui.KeyDown)
+	if app.selected != 1 {
+		t.Fatalf("down selection = %d", app.selected)
 	}
-	if got := networkTooltip(nil, nil, 0); got != "" {
-		t.Fatalf("empty tooltip = %q", got)
+	tester.Key(0, ui.KeyUp)
+	if app.selected != 0 {
+		t.Fatalf("up selection = %d", app.selected)
 	}
+	_ = tester.Click("正在监听")
+	if !app.settings.Paused || !tester.HasText("已暂停") {
+		t.Fatal("pause control did not change state")
+	}
+}
+
+func TestRenderClipboardStates(t *testing.T) {
+	dir := os.Getenv("VITALS_PREVIEW_DIR")
+	if dir == "" {
+		t.Skip("set VITALS_PREVIEW_DIR to export design previews")
+	}
+	app := previewApplication()
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	tester.SetScale(2)
+	save := func(name string) {
+		t.Helper()
+		file, err := os.Create(filepath.Join(dir, name+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if err := png.Encode(file, tester.Image()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("clipboard")
+	app.settingsOpen = true
+	tester.Frame()
+	save("settings")
+	app.settingsOpen = false
+	app.openEntry(app.entries[0])
+	tester.Frame()
+	save("editor")
+	app.detail = nil
+	app.entries = nil
+	tester.Frame()
+	save("empty")
 }

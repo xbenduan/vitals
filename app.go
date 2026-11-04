@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -12,678 +11,705 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
-	"sync/atomic"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
-	"golang.org/x/image/font/opentype"
-	"golang.org/x/image/math/fixed"
+	xdraw "golang.org/x/image/draw"
+)
 
-	"vitals/internal/core"
-	"vitals/internal/i18n"
+const (
+	panelWidth       = 480
+	panelHeight      = 588
+	accessibilityURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 )
 
 type application struct {
-	win          *mygo.Window
-	tray         *mygo.Tray
-	quitting     bool
-	showOnLaunch bool
+	win      *mygo.Window
+	tray     *mygo.Tray
+	native   *nativeBridge
+	quitting bool
 
-	sampler      *core.Sampler
-	snapshot     core.Snapshot
-	page         int
-	settings     appSettings
-	settingsPath string
-	sampleEvery  atomic.Int64
-	localizer    i18n.Localizer
+	settings          appSettings
+	settingsPath      string
+	settingsOpen      bool
+	shortcutDraft     string
+	shortcutActive    string
+	shortcutSuspended bool
+	limitChoice       string
+	recording         bool
+	trusted           bool
 
-	pendingMemory core.MemoryConsumer
-	memorySort    string
-	confirmMemory bool
-	releasingApp  string
-	memoryResult  string
-	actionError   string
-	errorOpen     bool
-	errorSettings bool
+	entries       []clipEntry
+	loading       bool
+	storageFailed bool
+	query         string
+	tab           int
+	selected      int
+	list          ui.ListState
+	searchHandle  ui.Handle
+	editorHandle  ui.Handle
+	detail        *clipEntry
+	editDraft     string
+	saving        bool
+	message       string
+	confirmClear  bool
+	confirmDelete bool
 
-	apps             []core.AppInfo
-	appIcons         map[string]*ui.Bitmap
-	iconRequested    map[string]bool
-	iconSlots        chan struct{}
-	appQuery         string
-	selectedApp      int
-	loadingApps      bool
-	scanningRelated  bool
-	uninstalling     bool
-	quittingApp      bool
-	confirmUninstall bool
-
-	startupItems   []core.StartupItem
-	startupLoaded  bool
-	startupLoading bool
-	startupError   string
+	images         map[string]*ui.Bitmap
+	imageRequested map[string]bool
+	imageErrors    map[string]string
+	previewID      string
+	previewImage   *ui.Bitmap
+	previewError   string
+	jobs           chan func(*historyStore)
+	done           chan struct{}
+	workerDone     chan struct{}
+	lastChange     int
+	target         pasteTarget
+	clickDelay     time.Duration
+	clickTimer     *time.Timer
+	actionSequence uint64
+	pasting        bool
 }
-
-const (
-	panelWidth  = 480
-	panelHeight = 620
-	iconWorkers = 4
-	iconTimeout = 10 * time.Second
-)
 
 func newApplication() *application {
-	app := &application{
-		sampler:       core.NewSampler(),
-		selectedApp:   -1,
-		memorySort:    "memory",
-		loadingApps:   true,
-		appIcons:      make(map[string]*ui.Bitmap),
-		iconRequested: make(map[string]bool),
-		iconSlots:     make(chan struct{}, iconWorkers),
-		settings:      defaultSettings(),
-		showOnLaunch:  launchWindowVisible(),
-	}
-	app.localizer = i18n.New(i18n.Lang(app.settings.Language))
-	app.sampleEvery.Store(int64(app.settings.refreshInterval()))
-	return app
-}
-
-// tr 返回当前语言下 key 对应的文案。
-func (a *application) tr(key string) string {
-	return a.localizer.T(key)
-}
-
-// trf 返回格式化后的文案。
-func (a *application) trf(key string, args ...any) string {
-	return a.localizer.Tf(key, args...)
-}
-
-// setLanguage 切换界面语言并持久化设置。
-func (a *application) setLanguage(lang string) {
-	a.settings.Language = lang
-	a.localizer = a.localizer.SetLang(i18n.Lang(lang))
-	a.persistSettings()
-	if a.tray != nil {
-		a.tray.SetToolTip(menuBarToolTip(a.snapshot, a.settings, a.localizer))
+	return &application{
+		settings:       defaultSettings(),
+		shortcutDraft:  defaultShortcut,
+		limitChoice:    "500",
+		loading:        true,
+		images:         make(map[string]*ui.Bitmap),
+		imageRequested: make(map[string]bool),
+		imageErrors:    make(map[string]string),
+		jobs:           make(chan func(*historyStore), 32),
+		done:           make(chan struct{}),
+		workerDone:     make(chan struct{}),
+		clickDelay:     530 * time.Millisecond,
 	}
 }
 
 func (a *application) ready() {
-	if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
-		a.settingsPath = filepath.Join(dir, "settings.json")
-		if settings, loadErr := loadSettings(a.settingsPath); loadErr == nil {
-			a.settings = settings
-		} else {
-			log.Println(loadErr)
-		}
+	dir, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		log.Fatal(err)
 	}
-	a.localizer = i18n.New(i18n.Lang(a.settings.Language))
+	// Keep the old system-monitor settings separate from the clipboard app.
+	a.settingsPath = filepath.Join(dir, "clipboard-settings.json")
+	if settings, err := loadSettings(a.settingsPath); err == nil {
+		a.settings = settings
+	} else {
+		a.message = err.Error()
+	}
+	a.shortcutDraft = a.settings.Shortcut
+	a.limitChoice = fmt.Sprint(a.settings.HistoryLimit)
 	a.settings.OpenAtLogin = mygo.App.OpenAtLogin()
-	a.sampleEvery.Store(int64(a.settings.refreshInterval()))
-	var err error
+	a.native, err = newNativeBridge()
+	if err != nil {
+		log.Fatal("macOS integration: ", err)
+	}
+	a.trusted = a.native.trusted()
+	a.clickDelay = max(a.native.doubleClickDelay(), 530*time.Millisecond)
+	a.target = a.native.frontmost()
+	a.lastChange = a.native.changeCount()
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon:           menuBarStatusImage(core.Snapshot{}, a.settings),
-		IconIsTemplate: true,
-		ToolTip:        a.tr("menu.tooltip.reading"),
+		Icon: menuBarIcon(), IconIsTemplate: true, ToolTip: "Vitals · 剪贴板",
 	})
 	if err != nil {
-		log.Fatal("create menu bar icon: ", err)
+		log.Fatal(err)
 	}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title:             "Vitals",
-		Width:             panelWidth,
-		Height:            panelHeight,
-		Hidden:            true,
-		Frameless:         true,
-		Transparent:       true,
-		Vibrancy:          mygo.VibrancyPopover,
-		DisableResize:     true,
-		DisableMove:       true,
-		DisableMinimize:   true,
-		DisableMaximize:   true,
-		DisableFullScreen: true,
-		AlwaysOnTop:       true,
-		SkipTaskbar:       true,
-		Content:           ui.View(a.view),
+		Title: "Vitals · 剪贴板", Width: panelWidth, Height: panelHeight,
+		Hidden: true, Frameless: true, Transparent: true,
+		DisableResize: true, DisableMove: true, DisableMinimize: true,
+		DisableMaximize: true, DisableFullScreen: true, AlwaysOnTop: true,
+		SkipTaskbar: true, Content: ui.View(a.view),
 	})
 	a.win.OnClose(a.handleWindowClose)
-	a.win.OnBlur(a.win.Hide)
+	a.win.OnBlur(func() {
+		if !a.pasting {
+			a.hideWindow()
+		}
+	})
+	a.win.OnFocus(func() { a.trusted = a.native.trusted(); a.win.Invalidate() })
 	a.tray.OnClick(a.toggleWindow)
-	a.tray.OnRightClick(a.openTrayMenu)
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { a.tray.Destroy() })
-	if a.showOnLaunch {
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			a.win.Center()
-			a.win.Show()
-			a.win.Focus()
-		}()
+	a.tray.OnRightClick(a.toggleWindow)
+	if err := mygo.GlobalShortcut.Register(a.settings.Shortcut, a.toggleWindow); err != nil {
+		a.message = "快捷键注册失败，请在设置中更换组合：" + err.Error()
+	} else {
+		a.shortcutActive = a.settings.Shortcut
 	}
-
-	go a.sampleLoop()
-	go a.loadApplications()
-	a.refreshStartupItems()
+	go a.diskLoop(filepath.Join(dir, "Clipboard"))
+	go a.monitorLoop()
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.shutdown() })
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		mygo.GlobalShortcut.UnregisterAll()
+		a.tray.Destroy()
+	})
+	if launchWindowVisible() {
+		a.showWindow()
+	}
 }
 
 func launchWindowVisible() bool {
-	for _, argument := range os.Args[1:] {
-		if argument == "--show" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(os.Args[1:], "--show")
 }
 
-func (a *application) handleWindowClose(event *mygo.CloseEvent) {
+func (a *application) diskLoop(dir string) {
+	defer close(a.workerDone)
+	store, err := openHistory(dir)
+	a.win.Update(func() {
+		a.loading = false
+		if err != nil {
+			a.storageFailed = true
+			a.message = err.Error()
+		}
+	})
+	if err == nil {
+		entries := store.snapshot()
+		a.win.Update(func() { a.entries = entries })
+	} else {
+		store = nil
+	}
+	for job := range a.jobs {
+		job(store)
+	}
+}
+
+func (a *application) submit(job func(*historyStore)) bool {
+	if a.quitting || a.win == nil {
+		return false
+	}
+	select {
+	case a.jobs <- job:
+		return true
+	default:
+		a.message = "正在处理剪贴板，请稍后重试"
+		return false
+	}
+}
+
+func (a *application) mutate(fn func(*historyStore) error, after func()) {
+	a.cancelPending()
+	if !a.submit(func(store *historyStore) {
+		if store == nil {
+			a.win.Update(func() {
+				a.saving = false
+				a.message = "历史存储不可用，请检查数据目录后重新启动"
+			})
+			return
+		}
+		err := fn(store)
+		entries := store.snapshot()
+		a.win.Update(func() {
+			if err != nil {
+				a.saving = false
+				a.message = err.Error()
+				return
+			}
+			a.setEntries(entries)
+			if after != nil {
+				after()
+			}
+		})
+	}) {
+		a.saving = false
+	}
+}
+
+func (a *application) setEntries(entries []clipEntry) {
+	a.entries = entries
+	used := make(map[string]bool)
+	for _, entry := range entries {
+		used[entry.ID] = true
+	}
+	for id := range a.imageRequested {
+		if !used[id] {
+			delete(a.images, id)
+			delete(a.imageRequested, id)
+			delete(a.imageErrors, id)
+		}
+	}
+}
+
+func (a *application) monitorLoop() {
+	ticker := time.NewTicker(350 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.done:
+			return
+		case <-ticker.C:
+			a.win.Update(a.pollClipboard)
+		}
+	}
+}
+
+func (a *application) pollClipboard() {
 	if a.quitting {
 		return
 	}
-	event.PreventDefault()
+	front := a.native.frontmost()
+	if !a.win.IsVisible() && !a.pasting && front.PID != 0 {
+		a.target = front
+	}
+	count := a.native.changeCount()
+	if a.settings.Paused || a.storageFailed || a.loading {
+		a.lastChange = count
+		return
+	}
+	if count == a.lastChange || len(a.jobs) == cap(a.jobs) {
+		return
+	}
+	capture := clipCapture{Source: front.Name, At: time.Now()}
+	formats := mygo.Clipboard.Formats()
+	// Files take precedence over an accompanying text URL or image preview.
+	if slices.Contains(formats, transfer.FileList) || slices.Contains(formats, transfer.URIList) {
+		files, err := mygo.Clipboard.ReadFiles()
+		if err == nil && len(files) > 0 {
+			capture.Kind, capture.Files = kindFiles, files
+		}
+	}
+	if capture.Kind == "" && slices.Contains(formats, transfer.PNG) {
+		if data := mygo.Clipboard.ReadImage(); len(data) > 0 {
+			capture.Kind, capture.PNG = kindImage, data
+		}
+	}
+	if capture.Kind == "" && slices.Contains(formats, transfer.Text) {
+		if text := mygo.Clipboard.ReadText(); text != "" {
+			capture.Kind, capture.Text = kindText, text
+		}
+	}
+	// A copy arriving during the read is retried in the next poll.
+	if a.native.changeCount() != count {
+		return
+	}
+	a.lastChange = count
+	if capture.Kind == "" {
+		return
+	}
+	limit := a.settings.HistoryLimit
+	a.submit(func(store *historyStore) {
+		if store == nil {
+			return
+		}
+		err := store.add(capture, limit)
+		entries := store.snapshot()
+		a.win.Update(func() {
+			if err != nil {
+				a.message = err.Error()
+				return
+			}
+			a.setEntries(entries)
+		})
+	})
+}
+
+func (a *application) cancelPending() {
+	a.actionSequence++
+	if a.clickTimer != nil {
+		a.clickTimer.Stop()
+		a.clickTimer = nil
+	}
+	a.pasting = false
+}
+
+func (a *application) clickEntry(entry clipEntry, index int) {
+	a.cancelPending()
+	a.selected = index
+	seq := a.actionSequence
+	if a.win == nil {
+		return
+	}
+	a.clickTimer = time.AfterFunc(a.clickDelay, func() {
+		a.win.Update(func() {
+			if a.actionSequence == seq && a.win.IsVisible() && a.detail == nil && !a.settingsOpen {
+				a.pasteEntry(entry)
+			}
+		})
+	})
+}
+
+func (a *application) openEntry(entry clipEntry) {
+	a.cancelPending()
+	a.detail = &entry
+	a.editDraft = entry.Text
+	a.message = ""
+	if entry.Kind == kindText {
+		a.editorHandle.Focus()
+	}
+}
+
+func (a *application) saveEdit(paste bool) {
+	if a.detail == nil || a.detail.Kind != kindText || a.saving {
+		return
+	}
+	entry, draft, limit := *a.detail, a.editDraft, a.settings.HistoryLimit
+	a.saving = true
+	a.mutate(func(store *historyStore) error { return store.edit(entry.ID, draft, limit) }, func() {
+		a.saving = false
+		a.detail = nil
+		a.searchHandle.Focus()
+		if paste {
+			entry.Text = draft
+			a.pasteEntry(entry)
+		}
+	})
+}
+
+func (a *application) pasteEntry(entry clipEntry) {
+	a.cancelPending()
+	if a.win == nil {
+		return
+	}
+	a.pasting = true
+	seq, target := a.actionSequence, a.target
+	if !a.submit(func(store *historyStore) {
+		var data transfer.Data
+		var err error
+		switch entry.Kind {
+		case kindText:
+			data = transfer.TextData(entry.Text)
+		case kindImage:
+			if store == nil {
+				err = errors.New("图片存储不可用")
+			} else {
+				var pngData []byte
+				pngData, err = os.ReadFile(store.imagePath(entry))
+				if err == nil {
+					data = transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, pngData)))
+				}
+			}
+		case kindFiles:
+			for _, path := range entry.Files {
+				if _, statErr := os.Stat(path); statErr != nil {
+					err = fmt.Errorf("文件已移动或不可访问：%s", filepath.Base(path))
+					break
+				}
+			}
+			if err == nil {
+				data, err = transfer.FileData(entry.Files...)
+			}
+		}
+		a.win.Update(func() {
+			if seq != a.actionSequence {
+				return
+			}
+			if err == nil {
+				err = mygo.Clipboard.Write(data)
+			}
+			if err != nil {
+				a.pasting = false
+				a.message = err.Error()
+				return
+			}
+			a.lastChange = a.native.changeCount()
+			a.trusted = a.native.trusted()
+			if !a.trusted {
+				a.pasting = false
+				a.message = "内容已复制。开启「辅助功能」后即可自动粘贴"
+				a.settingsOpen = true
+				return
+			}
+			if target.PID == 0 {
+				a.pasting = false
+				a.message = "内容已复制。请先切换到目标应用，再打开剪贴板"
+				return
+			}
+			a.win.Hide()
+			if !a.native.activate(target) {
+				a.pasteFailed("目标应用已退出或无法激活，内容已复制")
+				return
+			}
+			a.awaitPaste(target, seq, time.Now().Add(2*time.Second))
+		})
+	}) {
+		a.pasting = false
+	}
+}
+
+func (a *application) awaitPaste(target pasteTarget, seq uint64, deadline time.Time) {
+	time.AfterFunc(45*time.Millisecond, func() {
+		a.win.Update(func() {
+			if a.quitting || seq != a.actionSequence {
+				return
+			}
+			if a.native.frontmost().PID == target.PID && a.native.modifiersReleased() {
+				err := a.native.paste(target)
+				a.pasting = false
+				if err != nil {
+					a.pasteFailed(err.Error())
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				a.pasteFailed("未能恢复目标应用焦点，内容已复制，可使用 ⌘V 粘贴")
+				return
+			}
+			a.awaitPaste(target, seq, deadline)
+		})
+	})
+}
+
+func (a *application) pasteFailed(message string) {
+	a.pasting = false
+	a.message = message
+	a.showWindow()
+}
+
+func (a *application) requestImage(entry clipEntry, preview bool) {
+	if a.win == nil || entry.Kind == kindText {
+		return
+	}
+	if preview {
+		if a.previewID == entry.ID {
+			return
+		}
+		a.previewID, a.previewImage, a.previewError = entry.ID, nil, ""
+	} else {
+		if a.imageRequested[entry.ID] {
+			return
+		}
+		a.imageRequested[entry.ID] = true
+	}
+	if !a.submit(func(store *historyStore) {
+		var data []byte
+		var err error
+		path := ""
+		if entry.Kind == kindImage && store != nil {
+			path = store.imagePath(entry)
+		} else if entry.Kind == kindFiles && len(entry.Files) == 1 && isImagePath(entry.Files[0]) {
+			path = entry.Files[0]
+		}
+		if path == "" {
+			return
+		}
+		info, err := os.Stat(path)
+		if err == nil && info.Size() > maxImageBytes {
+			err = errors.New("图片超过预览大小限制")
+		}
+		if err == nil {
+			data, err = os.ReadFile(path)
+		}
+		var bitmap *ui.Bitmap
+		if err == nil {
+			config, _, configErr := image.DecodeConfig(bytes.NewReader(data))
+			if configErr != nil || int64(config.Width)*int64(config.Height) > maxImagePixels {
+				err = errors.New("无法预览此图片")
+			} else {
+				var decoded image.Image
+				decoded, _, err = image.Decode(bytes.NewReader(data))
+				if err == nil {
+					size := 72
+					if preview {
+						size = 1280
+					}
+					bitmap = ui.NewBitmap(resizePreview(decoded, size))
+				}
+			}
+		}
+		a.win.Update(func() {
+			if preview {
+				if a.previewID != entry.ID {
+					return
+				}
+				if err != nil {
+					a.previewError = "图片无法预览，文件可能已移动或不受支持"
+				} else {
+					a.previewImage = bitmap
+				}
+			} else {
+				if !a.imageRequested[entry.ID] {
+					return
+				}
+				if err != nil {
+					a.imageErrors[entry.ID] = "图片无法预览"
+				} else {
+					a.images[entry.ID] = bitmap
+				}
+			}
+		})
+	}) {
+		delete(a.imageRequested, entry.ID)
+		if preview {
+			a.previewID = ""
+		}
+	}
+}
+
+func resizePreview(source image.Image, size int) image.Image {
+	bounds := source.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if max(w, h) > size {
+		ratio := float64(size) / float64(max(w, h))
+		w, h = max(1, int(float64(w)*ratio)), max(1, int(float64(h)*ratio))
+	}
+	target := image.NewNRGBA(image.Rect(0, 0, w, h))
+	xdraw.CatmullRom.Scale(target, target.Bounds(), source, bounds, draw.Src, nil)
+	return target
+}
+
+func isImagePath(path string) bool {
+	return slices.Contains([]string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}, lowerExtension(path))
+}
+
+func (a *application) applyShortcut() {
+	if a.native == nil {
+		return
+	}
+	shortcut, err := normalizeShortcut(a.shortcutDraft)
+	if err != nil {
+		a.message = err.Error()
+		return
+	}
+	if shortcut == a.shortcutActive {
+		a.setRecording(false)
+		return
+	}
+	// Register the new binding before releasing the old one. A conflict leaves
+	// the working shortcut intact.
+	if err := mygo.GlobalShortcut.Register(shortcut, a.toggleWindow); err != nil {
+		a.message = "此快捷键无法注册，请换一个组合"
+		return
+	}
+	if a.shortcutActive != "" {
+		mygo.GlobalShortcut.Unregister(a.shortcutActive)
+	}
+	a.shortcutActive, a.settings.Shortcut, a.shortcutDraft = shortcut, shortcut, shortcut
+	a.recording = false
+	a.message = "快捷键已更新"
+	a.persistSettings()
+}
+
+func (a *application) setRecording(recording bool) {
+	a.recording = recording
+	if a.native == nil || a.shortcutActive == "" {
+		return
+	}
+	if recording && !a.shortcutSuspended {
+		mygo.GlobalShortcut.Unregister(a.shortcutActive)
+		a.shortcutSuspended = true
+	} else if !recording && a.shortcutSuspended {
+		a.shortcutSuspended = false
+		if err := mygo.GlobalShortcut.Register(a.shortcutActive, a.toggleWindow); err != nil {
+			a.message = "原快捷键无法恢复，请重新设置"
+			a.shortcutActive = ""
+		}
+	}
+}
+
+func (a *application) persistSettings() {
+	settings, path := a.settings, a.settingsPath
+	if path == "" {
+		return
+	}
+	a.submit(func(*historyStore) {
+		if err := saveSettings(path, settings); err != nil {
+			a.win.Update(func() { a.message = "设置未能保存：" + err.Error() })
+		}
+	})
+}
+
+func (a *application) toggleListening() {
+	a.cancelPending()
+	a.settings.Paused = !a.settings.Paused
+	if a.native != nil {
+		// Resuming starts with the next copy, not content copied while paused.
+		a.lastChange = a.native.changeCount()
+	}
+	a.persistSettings()
+}
+
+func (a *application) setOpenAtLogin() {
+	if err := mygo.App.SetOpenAtLogin(a.settings.OpenAtLogin); err != nil {
+		a.settings.OpenAtLogin = !a.settings.OpenAtLogin
+		a.message = "登录启动设置失败：" + err.Error()
+	}
+}
+
+func (a *application) handleWindowClose(event *mygo.CloseEvent) {
+	if !a.quitting {
+		event.PreventDefault()
+		a.hideWindow()
+	}
+}
+
+func (a *application) hideWindow() {
+	a.cancelPending()
+	a.setRecording(false)
 	if a.win != nil {
 		a.win.Hide()
 	}
 }
 
-func (a *application) loadStartupItems() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	items, err := core.ScanStartupItems(ctx)
-	a.win.Update(func() {
-		a.startupLoading = false
-		a.startupLoaded = true
-		if err != nil {
-			a.startupError = a.tr("error.startup_scan")
-			log.Println("scan startup items:", err)
-			return
-		}
-		a.startupError = ""
-		a.startupItems = items
-	})
-}
-
-func (a *application) refreshStartupItems() {
-	if a.startupLoading {
-		return
-	}
-	a.startupLoading = true
-	go a.loadStartupItems()
-}
-
-func (a *application) sampleLoop() {
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-		snapshot, _ := a.sampler.Sample(ctx)
-		cancel()
-		a.win.Update(func() {
-			a.snapshot = snapshot
-			_ = a.tray.SetIcon(menuBarStatusImage(snapshot, a.settings), true)
-			a.tray.SetToolTip(menuBarToolTip(snapshot, a.settings, a.localizer))
-		})
-		timer := time.NewTimer(time.Duration(a.sampleEvery.Load()))
-		<-timer.C
-	}
-}
-
-func (a *application) loadApplications() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	apps, err := core.ListApplications(ctx, a.localizer.Lang().BundleLocales())
-	if ctx.Err() != nil {
-		log.Println("list applications: timed out, showing partial results")
-	}
-	a.win.Update(func() {
-		a.loadingApps = false
-		a.apps = apps
-		if err != nil {
-			a.showActionError(err)
-		}
-	})
-}
-
-func (a *application) refreshApplications() {
-	if a.loadingApps {
-		return
-	}
-	a.loadingApps = true
-	go a.loadApplications()
-	a.refreshStartupItems()
-}
-
-// requestAppIcon 在首次渲染某个应用时异步转换其图标，期间界面显示占位头像。
-// 每个路径只请求一次，失败不重试。只能在 UI 线程调用：iconRequested 与 appIcons 都只在 build 回调和 win.Update 内读写。
-func (a *application) requestAppIcon(appPath string) {
-	if appPath == "" || a.iconRequested[appPath] {
-		return
-	}
-	a.iconRequested[appPath] = true
-	go func() {
-		a.iconSlots <- struct{}{}
-		defer func() { <-a.iconSlots }()
-		ctx, cancel := context.WithTimeout(context.Background(), iconTimeout)
-		defer cancel()
-		icon, err := ui.DecodeBitmap(core.ApplicationIconPNG(ctx, appPath))
-		if err != nil {
-			return
-		}
-		a.win.Update(func() { a.appIcons[appPath] = icon })
-	}()
-}
-
-func (a *application) selectApplication(index int) {
-	if a.uninstalling || index < 0 || index >= len(a.apps) {
-		return
-	}
-	a.selectedApp = index
-	if !a.startupLoaded && !a.startupLoading && a.win != nil {
-		a.refreshStartupItems()
-	}
-	if a.apps[index].Scanned || a.scanningRelated {
-		return
-	}
-	a.scanningRelated = true
-	app := a.apps[index]
-	activeDataPath := ""
-	if a.settingsPath != "" {
-		activeDataPath = filepath.Dir(a.settingsPath)
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		sizeDone := make(chan uint64, 1)
-		go func() { sizeDone <- core.BundleSize(app.Path) }()
-		files, err := core.ScanRelatedFiles(ctx, app)
-		files = excludeRelatedPath(files, activeDataPath)
-		size := <-sizeDone
-		a.win.Update(func() {
-			a.scanningRelated = false
-			if index >= len(a.apps) || a.apps[index].Path != app.Path {
-				return
-			}
-			a.apps[index].Scanned = true
-			a.apps[index].Size = size
-			a.apps[index].Related = files
-			a.apps[index].TotalBytes = a.apps[index].Size
-			for _, file := range files {
-				if file.Selected {
-					a.apps[index].TotalBytes += file.Size
-				}
-			}
-			if err != nil {
-				a.apps[index].ScanError = err.Error()
-			}
-		})
-	}()
-}
-
-func excludeRelatedPath(files []core.RelatedFile, excluded string) []core.RelatedFile {
-	if excluded == "" {
-		return files
-	}
-	excluded = filepath.Clean(excluded)
-	filtered := files[:0]
-	for _, file := range files {
-		path := filepath.Clean(file.Path)
-		if path == excluded || strings.HasPrefix(path, excluded+string(filepath.Separator)) {
-			continue
-		}
-		filtered = append(filtered, file)
-	}
-	return filtered
-}
-
-func (a *application) requestApplicationMemoryRelease(consumer core.MemoryConsumer) {
-	a.pendingMemory = consumer
-	a.confirmMemory = true
-}
-
-func (a *application) releaseApplicationMemory() {
-	consumer := a.pendingMemory
-	app, ok := a.applicationByPath(consumer.AppPath)
-	if !ok || app.BundleID == "" || app.BundleID == "dev.vitals.mac" || a.releasingApp != "" {
-		return
-	}
-	a.releasingApp = consumer.AppPath
-	a.memoryResult = ""
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if err := core.QuitApplication(ctx, app); err != nil {
-			a.win.Update(func() {
-				a.releasingApp = ""
-				a.showActionError(err)
-			})
-			return
-		}
-		for range 6 {
-			if !core.ApplicationRunning(ctx, app.Path) {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		stillRunning := core.ApplicationRunning(ctx, app.Path)
-		snapshot := a.sampler.RefreshMemoryConsumers(ctx)
-		remaining := uint64(0)
-		for _, current := range snapshot.MemoryConsumers {
-			if current.AppPath == consumer.AppPath {
-				remaining = current.RSS
-				break
-			}
-		}
-		released := uint64(0)
-		if consumer.RSS > remaining {
-			released = consumer.RSS - remaining
-		}
-		a.win.Update(func() {
-			a.releasingApp = ""
-			a.snapshot = snapshot
-			for index := range a.apps {
-				if a.apps[index].Path == app.Path {
-					a.apps[index].Running = stillRunning
-					break
-				}
-			}
-			if stillRunning {
-				a.memoryResult = a.trf("memory.release_pending", app.Name)
-			} else {
-				a.memoryResult = a.trf("memory.release_done", app.Name, formatBytes(released))
-			}
-		})
-	}()
-}
-
-func (a *application) applicationByPath(path string) (core.AppInfo, bool) {
-	for index := range a.apps {
-		if a.apps[index].Path == path {
-			return a.apps[index], true
-		}
-	}
-	return core.AppInfo{}, false
-}
-
-func (a *application) canReleaseApplicationMemory(path string) bool {
-	app, ok := a.applicationByPath(path)
-	return ok && app.BundleID != "" && app.BundleID != "dev.vitals.mac"
-}
-
-func (a *application) uninstallSelected() {
-	if a.selectedApp < 0 || a.selectedApp >= len(a.apps) || a.uninstalling {
-		return
-	}
-	index := a.selectedApp
-	app := a.apps[a.selectedApp]
-	var paths []string
-	for _, file := range app.Related {
-		if file.Selected {
-			paths = append(paths, file.Path)
-		}
-	}
-	paths = append(paths, app.Path)
-	a.uninstalling = true
-	a.actionError = ""
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		err := core.MoveToTrash(ctx, paths, mygo.Shell.TrashItem)
-		a.win.Update(func() {
-			a.uninstalling = false
-			if err != nil {
-				a.showActionError(err)
-				return
-			}
-			if index < len(a.apps) && a.apps[index].Path == app.Path {
-				a.apps = append(a.apps[:index], a.apps[index+1:]...)
-				a.selectedApp = -1
-			}
-		})
-	}()
-}
-
-func (a *application) quitSelectedApplication() {
-	if a.selectedApp < 0 || a.selectedApp >= len(a.apps) || a.quittingApp {
-		return
-	}
-	index := a.selectedApp
-	app := a.apps[index]
-	a.quittingApp = true
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		err := core.QuitApplication(ctx, app)
-		a.win.Update(func() {
-			a.quittingApp = false
-			if err != nil {
-				a.showActionError(err)
-				return
-			}
-			if index < len(a.apps) && a.apps[index].Path == app.Path {
-				a.apps[index].Running = false
-			}
-		})
-	}()
-}
-
-func (a *application) showActionError(err error) {
-	var permissionError *core.FullDiskAccessError
-	a.errorSettings = errors.As(err, &permissionError)
-	if a.errorSettings {
-		a.actionError = a.trf("error.full_disk_body", permissionError.Path)
-	} else {
-		a.actionError = err.Error()
-	}
-	a.errorOpen = true
-}
-
-func (a *application) persistSettings() {
-	a.settings.normalize()
-	a.sampleEvery.Store(int64(a.settings.refreshInterval()))
-	if a.settingsPath != "" {
-		if err := saveSettings(a.settingsPath, a.settings); err != nil {
-			a.showActionError(fmt.Errorf("save settings: %w", err))
-		}
-	}
-	if a.tray != nil {
-		_ = a.tray.SetIcon(menuBarStatusImage(a.snapshot, a.settings), true)
-		a.tray.SetToolTip(menuBarToolTip(a.snapshot, a.settings, a.localizer))
-	}
-}
-
-func (a *application) setOpenAtLogin(enabled bool) {
-	if err := mygo.App.SetOpenAtLogin(enabled); err != nil {
-		a.settings.OpenAtLogin = !enabled
-		a.showActionError(fmt.Errorf("update login item: %w", err))
-		return
-	}
-	a.settings.OpenAtLogin = enabled
-}
-
 func (a *application) toggleWindow() {
 	if a.win.IsVisible() {
-		a.win.Hide()
-		return
+		a.hideWindow()
+	} else {
+		a.showWindow()
 	}
-	a.showWindow()
 }
 
 func (a *application) showWindow() {
+	a.cancelPending()
+	if target := a.native.frontmost(); target.PID != 0 {
+		a.target = target
+	}
+	a.trusted = a.native.trusted()
 	anchor := a.tray.Bounds()
-	if anchor.Width > 0 && anchor.Height > 0 {
-		area := mygo.Screen.DisplayNearestPoint(mygo.Point{
-			X: anchor.X + anchor.Width/2,
-			Y: anchor.Y + anchor.Height/2,
-		}).WorkArea
+	if anchor.Width > 0 {
+		area := mygo.Screen.DisplayNearestPoint(mygo.Point{X: anchor.X, Y: anchor.Y}).WorkArea
 		bounds := a.win.Bounds()
-		x := anchor.X + (anchor.Width-bounds.Width)/2
-		y := anchor.Y + anchor.Height + 8
-		x = max(area.X, min(x, area.X+area.Width-bounds.Width))
-		y = max(area.Y, min(y, area.Y+area.Height-bounds.Height))
+		x := max(area.X, min(anchor.X+(anchor.Width-bounds.Width)/2, area.X+area.Width-bounds.Width))
+		y := max(area.Y, min(anchor.Y+anchor.Height+6, area.Y+area.Height-bounds.Height))
 		a.win.SetPosition(x, y)
 	} else {
 		a.win.Center()
+	}
+	if a.detail == nil && !a.settingsOpen {
+		a.searchHandle.Focus()
 	}
 	a.win.Show()
 	a.win.Focus()
 }
 
-func (a *application) openTrayMenu() {
-	a.win.Hide()
-	menu := mygo.NewMenu([]*mygo.MenuItem{
-		{Label: a.tr("common.open_vitals"), Click: func(*mygo.MenuItem, *mygo.Window) { a.showWindow() }},
-		mygo.Separator(),
-		{Role: mygo.RoleQuit},
-	})
-	a.tray.SetMenu(menu)
-	defer a.tray.SetMenu(nil)
-	a.tray.PopUpMenu()
+func (a *application) shutdown() {
+	if a.quitting {
+		return
+	}
+	a.quitting = true
+	a.cancelPending()
+	close(a.done)
+	close(a.jobs)
+	// Jobs only post asynchronous UI updates, so the main thread can safely
+	// wait for pending disk writes before exiting.
+	<-a.workerDone
 }
 
-func filteredApplications(apps []core.AppInfo, query string) []int {
-	query = strings.ToLower(strings.TrimSpace(query))
-	var indices []int
-	for index, app := range apps {
-		if query == "" || strings.Contains(strings.ToLower(app.Name), query) || strings.Contains(strings.ToLower(app.BundleID), query) {
-			indices = append(indices, index)
+func menuBarIcon() []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, 36, 36))
+	ink := color.NRGBA{A: 255}
+	line := func(x, y, w, h int) {
+		for dx := range w {
+			for dy := range h {
+				img.Set(x+dx, y+dy, ink)
+			}
 		}
 	}
-	return indices
-}
-
-func menuBarStatusImage(snapshot core.Snapshot, settings appSettings) []byte {
-	const (
-		height       = 36
-		metricWidth  = 54
-		networkWidth = 108
-		leftPadding  = 4
-	)
-	settings.normalize()
-	width := leftPadding
-	for _, visible := range []bool{settings.ShowGPU, settings.ShowCPU, settings.ShowRAM} {
-		if visible {
-			width += metricWidth
-		}
-	}
-	if settings.ShowNetwork {
-		width += networkWidth
-	}
-	down, up := compactRate(snapshot.NetworkDown), compactRate(snapshot.NetworkUp)
-	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	ink := image.NewUniform(color.NRGBA{A: 255})
-	text := font.Drawer{Dst: img, Src: ink, Face: menuBarFont()}
-	drawText := func(x, baseline int, value string) {
-		text.Dot = fixed.P(x, baseline)
-		text.DrawString(value)
-	}
-
-	x := leftPadding
-	if settings.ShowGPU {
-		drawText(x, 15, "GPU")
-		drawText(x, 33, fmt.Sprintf("%.0f%%", snapshot.GPUPercent))
-		x += metricWidth
-	}
-	if settings.ShowCPU {
-		drawText(x, 15, "CPU")
-		drawText(x, 33, fmt.Sprintf("%.0f%%", snapshot.CPUPercent))
-		x += metricWidth
-	}
-	if settings.ShowRAM {
-		drawText(x, 15, "RAM")
-		drawText(x, 33, fmt.Sprintf("%.0f%%", snapshot.MemoryPercent))
-		x += metricWidth
-	}
-	if settings.ShowNetwork {
-		drawArrow(img, x, 5, true)
-		drawArrow(img, x, 22, false)
-		drawText(x+13, 15, down)
-		drawText(x+13, 33, up)
-	}
-
+	line(9, 7, 4, 25)
+	line(9, 28, 21, 4)
+	line(27, 7, 3, 25)
+	line(9, 7, 6, 3)
+	line(23, 7, 7, 3)
+	line(14, 4, 10, 3)
+	line(14, 4, 3, 8)
+	line(21, 4, 3, 8)
+	line(14, 10, 10, 3)
+	line(16, 17, 8, 2)
+	line(16, 22, 6, 2)
 	var buffer bytes.Buffer
 	_ = png.Encode(&buffer, img)
 	return buffer.Bytes()
-}
-
-func menuBarToolTip(snapshot core.Snapshot, settings appSettings, tr i18n.Localizer) string {
-	parts := make([]string, 0, 5)
-	if settings.ShowGPU {
-		parts = append(parts, fmt.Sprintf("GPU %.0f%%", snapshot.GPUPercent))
-	}
-	if settings.ShowCPU {
-		parts = append(parts, fmt.Sprintf("CPU %.0f%%", snapshot.CPUPercent))
-	}
-	if settings.ShowRAM {
-		parts = append(parts, fmt.Sprintf("RAM %.0f%%", snapshot.MemoryPercent))
-	}
-	if settings.ShowNetwork {
-		parts = append(parts, tr.Tf("menu.tooltip.download", formatRate(snapshot.NetworkDown)), tr.Tf("menu.tooltip.upload", formatRate(snapshot.NetworkUp)))
-	}
-	return strings.Join(parts, " · ") + " · " + tr.Tf("menu.tooltip.updated", snapshot.UpdatedAt.Format("15:04:05"))
-}
-
-var statusFont struct {
-	once sync.Once
-	face font.Face
-}
-
-func menuBarFont() font.Face {
-	statusFont.once.Do(func() {
-		data, err := os.ReadFile("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
-		if err != nil {
-			return
-		}
-		parsed, err := opentype.Parse(data)
-		if err != nil {
-			return
-		}
-		statusFont.face, _ = opentype.NewFace(parsed, &opentype.FaceOptions{
-			Size:    8,
-			DPI:     144,
-			Hinting: font.HintingFull,
-		})
-	})
-	if statusFont.face != nil {
-		return statusFont.face
-	}
-	return basicfont.Face7x13
-}
-
-func drawArrow(img draw.Image, x, y int, down bool) {
-	ink := color.NRGBA{A: 255}
-	if down {
-		for offset := 0; offset < 8; offset++ {
-			img.Set(x+4, y+offset, ink)
-			img.Set(x+5, y+offset, ink)
-		}
-		for offset := 0; offset < 4; offset++ {
-			img.Set(x+offset+1, y+7-offset, ink)
-			img.Set(x+8-offset, y+7-offset, ink)
-		}
-		return
-	}
-	for offset := 0; offset < 8; offset++ {
-		img.Set(x+4, y+offset, ink)
-		img.Set(x+5, y+offset, ink)
-	}
-	for offset := 0; offset < 4; offset++ {
-		img.Set(x+offset+1, y+offset, ink)
-		img.Set(x+8-offset, y+offset, ink)
-	}
-}
-
-func compactRate(value uint64) string {
-	switch {
-	case value >= 1024*1024*1024:
-		return fmt.Sprintf("%.1fg/s", float64(value)/(1024*1024*1024))
-	case value >= 1024*1024:
-		return fmt.Sprintf("%.1fm/s", float64(value)/(1024*1024))
-	case value >= 100*1024:
-		return fmt.Sprintf("%.0fKB/s", float64(value)/1024)
-	case value >= 1024:
-		return fmt.Sprintf("%.1fKB/s", float64(value)/1024)
-	default:
-		return fmt.Sprintf("%dB/s", value)
-	}
 }
