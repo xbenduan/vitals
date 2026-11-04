@@ -156,6 +156,9 @@ func (a *application) changeTranslationDraft() {
 }
 
 func (a *application) saveTranslationSettings() {
+	if a.recording {
+		return
+	}
 	cfg := a.translationDraft.WithDefaults()
 	// Allow clearing both credentials to disconnect the account.
 	if cfg.User != "" || cfg.Token != "" {
@@ -164,9 +167,17 @@ func (a *application) saveTranslationSettings() {
 			return
 		}
 	}
+	shortcut, err := a.replaceShortcut(a.translationShortcutDraft, true)
+	if err != nil {
+		a.translationStatus = err.Error()
+		return
+	}
 	a.cancelTranslationCheck()
 	a.settings.Translation = cfg
 	a.translationDraft = cfg
+	a.settings.TranslationShortcut = shortcut
+	a.translationShortcutDraft = shortcut
+	a.translationShortcutError = ""
 	a.persistSettings()
 	a.translationStatus = "翻译配置已保存"
 }

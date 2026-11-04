@@ -19,6 +19,8 @@ import (
 
 func previewApplication() *application {
 	app := newApplication()
+	app.shortcuts = newTestShortcutRegistry()
+	app.registerShortcuts()
 	app.loading = false
 	at := time.Date(2026, 11, 4, 14, 23, 8, 0, time.Local)
 	app.entries = []clipboard.Entry{
@@ -155,6 +157,10 @@ func TestSettingsAndShortcutRecording(t *testing.T) {
 	if app.recording || app.shortcutDraft != want {
 		t.Fatalf("recorded shortcut = %q, recording %v", app.shortcutDraft, app.recording)
 	}
+	_ = tester.Click("保存快捷键")
+	if app.settings.Shortcut != want || app.shortcuts.(*testShortcutRegistry).bindings[want] == nil {
+		t.Fatal("saving must apply the recorded history shortcut")
+	}
 	if runtime.GOOS == "darwin" {
 		_ = tester.Click("打开辅助功能设置")
 		if got := tester.OpenedURLs(); len(got) != 1 || got[0] != accessibilityURL {
@@ -167,6 +173,43 @@ func TestSettingsAndShortcutRecording(t *testing.T) {
 	tester.Frame()
 	if app.settingsOpen || !tester.HasText("最近复制") {
 		t.Fatal("settings must return to clipboard")
+	}
+}
+
+func TestSettingsLayoutKeepsControlsAndActionsVisible(t *testing.T) {
+	app := previewApplication()
+	app.openSettings()
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	if tester.HasText("划词翻译") {
+		t.Fatal("translation shortcut belongs only on the translation settings tab")
+	}
+	historySave, ok := tester.Find("保存快捷键")
+	if !ok {
+		t.Fatal("missing history save action")
+	}
+	for _, label := range []string{"全局快捷键", "录制", "恢复默认", "登录时启动", "保留条数", "清空历史"} {
+		control, ok := tester.Find(label)
+		if !ok || control.X < 16 || control.X+control.W > panelWidth-16 || control.Y < 90 || control.Y+control.H >= historySave.Y-20 {
+			t.Fatalf("%s is outside the settings content: %+v", label, control)
+		}
+	}
+	_ = tester.Click("翻译")
+	tester.Frame()
+	tester.Frame()
+	translationSave, ok := tester.Find("保存翻译配置")
+	if !ok || translationSave.Y != historySave.Y || translationSave.Y+translationSave.H > panelHeight-32 {
+		t.Fatal("both settings tabs must keep actions in the same visible bottom area")
+	}
+	for _, label := range []string{"划词翻译快捷键", "录制", "恢复默认", "开发者 User", "开发者 Token", "选择目标语言", "获取凭据"} {
+		control, ok := tester.Find(label)
+		if !ok || control.X < 16 || control.X+control.W > panelWidth-16 || control.Y < 90 || control.Y+control.H >= translationSave.Y-20 {
+			t.Fatalf("%s is outside the translation settings content: %+v", label, control)
+		}
+	}
+	user, _ := tester.Find("开发者 User")
+	token, _ := tester.Find("开发者 Token")
+	if user.X != token.X || user.W != token.W {
+		t.Fatal("credential inputs must share a label column and width")
 	}
 }
 

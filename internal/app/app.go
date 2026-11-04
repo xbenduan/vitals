@@ -32,17 +32,24 @@ type application struct {
 	native   *platform.Bridge
 	quitting bool
 
-	settings                 config.Settings
-	settingsPath             string
-	settingsOpen             bool
-	settingsTab              int
-	shortcutDraft            string
-	shortcutActive           string
-	shortcutSuspended        bool
-	translationShortcutError string
-	limitChoice              string
-	recording                bool
-	trusted                  bool
+	settings                     config.Settings
+	settingsPath                 string
+	settingsOpen                 bool
+	settingsTab                  int
+	shortcutDraft                string
+	shortcutActive               string
+	shortcutSuspended            bool
+	shortcutError                string
+	shortcutStatus               string
+	shortcuts                    shortcutRegistry
+	translationShortcutDraft     string
+	translationShortcutActive    string
+	translationShortcutSuspended bool
+	translationShortcutError     string
+	limitChoice                  string
+	recording                    bool
+	recordingTranslation         bool
+	trusted                      bool
 
 	entries       []clipboard.Entry
 	loading       bool
@@ -93,17 +100,18 @@ type application struct {
 
 func newApplication() *application {
 	return &application{
-		settings:         config.Default(),
-		shortcutDraft:    config.DefaultShortcut,
-		limitChoice:      "500",
-		loading:          true,
-		images:           make(map[string]*ui.Bitmap),
-		imageRequested:   make(map[string]bool),
-		imageErrors:      make(map[string]string),
-		jobs:             make(chan func(*clipboard.Store), 32),
-		done:             make(chan struct{}),
-		workerDone:       make(chan struct{}),
-		translationDraft: translation.Default(),
+		settings:                 config.Default(),
+		shortcutDraft:            config.DefaultShortcut,
+		translationShortcutDraft: config.DefaultTranslationShortcut,
+		limitChoice:              "500",
+		loading:                  true,
+		images:                   make(map[string]*ui.Bitmap),
+		imageRequested:           make(map[string]bool),
+		imageErrors:              make(map[string]string),
+		jobs:                     make(chan func(*clipboard.Store), 32),
+		done:                     make(chan struct{}),
+		workerDone:               make(chan struct{}),
+		translationDraft:         translation.Default(),
 	}
 }
 
@@ -122,6 +130,7 @@ func (a *application) ready() {
 		a.message = err.Error()
 	}
 	a.shortcutDraft = a.settings.Shortcut
+	a.translationShortcutDraft = a.settings.TranslationShortcut
 	a.limitChoice = fmt.Sprint(a.settings.HistoryLimit)
 	a.settings.OpenAtLogin = mygo.App.OpenAtLogin()
 	a.translationDraft = a.settings.Translation
@@ -154,22 +163,8 @@ func (a *application) ready() {
 	a.win.OnFocus(func() { a.trusted = a.native.Trusted(); a.win.Invalidate() })
 	a.tray.OnClick(a.toggleWindow)
 	a.tray.OnRightClick(a.toggleWindow)
-	// Reserve selected-text translation before registering the configurable
-	// history shortcut. Older settings may already use this combination.
-	if err := mygo.GlobalShortcut.Register(translationShortcut(), a.translateSelection); err != nil {
-		a.translationShortcutError = "划词翻译快捷键注册失败，请检查是否被其他应用占用"
-		a.message = a.translationShortcutError
-	}
-	if shortcut, _ := normalizeShortcut(a.settings.Shortcut); shortcut == translationShortcut() {
-		a.settings.Shortcut = config.DefaultShortcut
-		a.shortcutDraft = a.settings.Shortcut
-		a.message = "划词翻译使用 " + shortcutLabel(translationShortcut()) + "，打开历史已恢复默认快捷键"
-	}
-	if err := mygo.GlobalShortcut.Register(a.settings.Shortcut, a.toggleWindow); err != nil {
-		a.message = "快捷键注册失败，请在设置中更换组合：" + err.Error()
-	} else {
-		a.shortcutActive = a.settings.Shortcut
-	}
+	a.shortcuts = mygo.GlobalShortcut
+	a.registerShortcuts()
 	go a.diskLoop(filepath.Join(dir, "Clipboard"))
 	if settingsLoaded {
 		// Persist the normalized schema to remove obsolete translation settings.

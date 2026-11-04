@@ -11,11 +11,14 @@ func (a *application) openSettings() {
 	a.cancelPending()
 	a.cancelTranslation()
 	a.cancelTranslationCheck()
+	a.setRecording(false)
+	a.shortcutDraft = a.settings.Shortcut
+	a.translationShortcutDraft = a.settings.TranslationShortcut
+	a.shortcutStatus = ""
 	a.translationDraft = a.settings.Translation
 	a.translationStatus = ""
 	a.settingsTab = 0
 	a.settingsOpen = true
-	a.setRecording(false)
 	a.message = ""
 }
 

@@ -134,7 +134,7 @@ func (a *application) translateSelection() {
 	a.message = ""
 	a.target = target
 	if target.PID == 0 {
-		a.openSelectionTranslation("", errors.New("请先在其他应用中选中文字，再按 "+shortcutLabel(translationShortcut())))
+		a.openSelectionTranslation("", errors.New("请先在其他应用中选中文字，再按 "+shortcutLabel(a.settings.TranslationShortcut)))
 		a.presentWindow()
 		return
 	}

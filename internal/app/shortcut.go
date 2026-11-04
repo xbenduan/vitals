@@ -8,22 +8,19 @@ import (
 
 	"vitals/internal/config"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+type shortcutRegistry interface {
+	Register(string, func()) error
+	Unregister(string)
+}
 
 func primaryModifier() ui.Modifiers {
 	if runtime.GOOS == "darwin" {
 		return ui.Cmd
 	}
 	return ui.Ctrl
-}
-
-func translationShortcut() string {
-	if runtime.GOOS == "darwin" {
-		return "Command+Shift+F"
-	}
-	return "Control+Shift+F"
 }
 
 func primaryShortcutLabel(key string) string {
@@ -128,62 +125,133 @@ func (a *application) recordShortcut(c *ui.Context) {
 			c.OnShortcut(mods, key, func() {
 				shortcut, err := shortcutFromKey(mods, name)
 				if err != nil {
-					a.message = err.Error()
+					a.recordingStatus(err.Error())
 					return
 				}
-				a.shortcutDraft = shortcut
+				if a.recordingTranslation {
+					a.translationShortcutDraft = shortcut
+				} else {
+					a.shortcutDraft = shortcut
+				}
 				a.setRecording(false)
-				a.message = "点击「保存快捷键」使新组合生效"
+				a.recordingStatus("已录制，保存后生效")
 			})
 		}
 	}
 }
 
 func (a *application) applyShortcut() {
-	if a.native == nil {
+	if a.recording {
 		return
 	}
-	shortcut, err := normalizeShortcut(a.shortcutDraft)
+	shortcut, err := a.replaceShortcut(a.shortcutDraft, false)
 	if err != nil {
-		a.message = err.Error()
+		a.shortcutStatus = err.Error()
 		return
 	}
-	if shortcut == translationShortcut() {
-		a.message = "此组合已用于划词翻译，请为打开剪贴板选择其他快捷键"
-		return
+	a.settings.Shortcut, a.shortcutDraft = shortcut, shortcut
+	a.shortcutError = ""
+	a.shortcutStatus = "快捷键已保存"
+	a.persistSettings()
+}
+
+func (a *application) registerShortcuts() {
+	// Preserve the existing history binding when an older configuration already
+	// uses the new translation default. Surface the collision without resetting it.
+	shortcut, err := normalizeShortcut(a.settings.Shortcut)
+	if err == nil {
+		err = a.shortcuts.Register(shortcut, a.toggleWindow)
 	}
-	if shortcut == a.shortcutActive {
+	if err != nil {
+		a.shortcutError = "打开剪贴板快捷键注册失败，请更换组合"
+	} else {
+		a.shortcutActive = shortcut
+	}
+	if _, err := a.replaceShortcut(a.settings.TranslationShortcut, true); err != nil {
+		a.translationShortcutError = "划词翻译快捷键未启用：" + err.Error()
+	}
+	if a.shortcutError != "" || a.translationShortcutError != "" {
+		a.message = "部分快捷键未启用，请在设置中更换组合"
+	}
+}
+
+func (a *application) replaceShortcut(draft string, forTranslation bool) (string, error) {
+	shortcut, err := normalizeShortcut(draft)
+	if err != nil {
+		return "", err
+	}
+	active, callback := &a.shortcutActive, a.toggleWindow
+	otherSaved, otherActive, otherName := a.settings.TranslationShortcut, a.translationShortcutActive, "划词翻译"
+	if forTranslation {
+		active, callback = &a.translationShortcutActive, a.translateSelection
+		otherSaved, otherActive, otherName = a.settings.Shortcut, a.shortcutActive, "打开剪贴板"
+	}
+	otherSaved, _ = normalizeShortcut(otherSaved)
+	if shortcut == otherSaved || shortcut == otherActive {
+		return "", fmt.Errorf("此组合已用于%s，请换一个组合", otherName)
+	}
+	if a.shortcuts == nil {
+		return "", errors.New("快捷键服务尚未就绪")
+	}
+	if shortcut == *active {
+		return shortcut, nil
+	}
+	// Register first so conflicts never discard the currently working binding.
+	if err := a.shortcuts.Register(shortcut, callback); err != nil {
+		return "", errors.New("此快捷键无法注册，请检查占用或换一个组合")
+	}
+	if *active != "" {
+		a.shortcuts.Unregister(*active)
+	}
+	*active = shortcut
+	return shortcut, nil
+}
+
+func (a *application) recordingStatus(status string) {
+	if a.recordingTranslation {
+		a.translationStatus = status
+	} else {
+		a.shortcutStatus = status
+	}
+}
+
+func (a *application) toggleRecording(forTranslation bool) {
+	a.cancelPending()
+	if a.recording {
 		a.setRecording(false)
 		return
 	}
-	// Register the new binding before releasing the old one. A conflict leaves
-	// the working shortcut intact.
-	if err := mygo.GlobalShortcut.Register(shortcut, a.toggleWindow); err != nil {
-		a.message = "此快捷键无法注册，请换一个组合"
-		return
-	}
-	if a.shortcutActive != "" {
-		mygo.GlobalShortcut.Unregister(a.shortcutActive)
-	}
-	a.shortcutActive, a.settings.Shortcut, a.shortcutDraft = shortcut, shortcut, shortcut
-	a.recording = false
-	a.message = "快捷键已更新"
-	a.persistSettings()
+	a.recordingTranslation = forTranslation
+	a.recordingStatus("")
+	a.setRecording(true)
 }
 
 func (a *application) setRecording(recording bool) {
 	a.recording = recording
-	if a.native == nil || a.shortcutActive == "" {
+	if a.shortcuts == nil {
 		return
 	}
-	if recording && !a.shortcutSuspended {
-		mygo.GlobalShortcut.Unregister(a.shortcutActive)
-		a.shortcutSuspended = true
-	} else if !recording && a.shortcutSuspended {
-		a.shortcutSuspended = false
-		if err := mygo.GlobalShortcut.Register(a.shortcutActive, a.toggleWindow); err != nil {
-			a.message = "原快捷键无法恢复，请重新设置"
-			a.shortcutActive = ""
+	for _, binding := range []struct {
+		active    *string
+		suspended *bool
+		errorText *string
+		callback  func()
+		name      string
+	}{
+		{&a.shortcutActive, &a.shortcutSuspended, &a.shortcutError, a.toggleWindow, "打开剪贴板"},
+		{&a.translationShortcutActive, &a.translationShortcutSuspended, &a.translationShortcutError, a.translateSelection, "划词翻译"},
+	} {
+		if recording && *binding.active != "" && !*binding.suspended {
+			a.shortcuts.Unregister(*binding.active)
+			*binding.suspended = true
+		} else if !recording && *binding.suspended {
+			*binding.suspended = false
+			if err := a.shortcuts.Register(*binding.active, binding.callback); err != nil {
+				*binding.errorText = binding.name + "快捷键无法恢复，请重新保存或更换组合"
+				*binding.active = ""
+			} else {
+				*binding.errorText = ""
+			}
 		}
 	}
 }
