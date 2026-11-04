@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/platform"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/platform"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"

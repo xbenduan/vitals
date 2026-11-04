@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"vitals/internal/atomicfile"
+	"clipnest/internal/atomicfile"
 )
 
 // Store manages history metadata and owned image assets on disk.

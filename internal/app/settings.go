@@ -1,8 +1,8 @@
 package app
 
 import (
-	"vitals/internal/clipboard"
-	"vitals/internal/config"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/config"
 
 	"github.com/egoist/mygo"
 )

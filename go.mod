@@ -1,4 +1,4 @@
-module vitals
+module clipnest
 
 go 1.27.1
 

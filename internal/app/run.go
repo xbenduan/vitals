@@ -2,7 +2,6 @@
 package app
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -10,14 +9,21 @@ import (
 	"github.com/egoist/mygo"
 )
 
+const (
+	appName  = "ClipNest"
+	appTitle = "拾贴 · ClipNest"
+)
+
 // Run initializes the tray application and runs its event loop until quit.
 // Call it once from the process entry point.
 func Run() error {
 	app := newApplication()
-	mygo.App.SetName("Vitals")
-	configureDevelopmentUserData()
+	mygo.App.SetName(appName)
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
+	}
+	if err := configureUserData(); err != nil {
+		return err
 	}
 	mygo.App.OnSecondInstance(func(_ []string, _ string) {
 		if app.win != nil && !app.quitting {
@@ -37,23 +43,10 @@ func Run() error {
 	return mygo.App.Run()
 }
 
-func configureDevelopmentUserData() {
-	executable, executableErr := os.Executable()
-	appData, appDataErr := os.UserConfigDir()
-	if executableErr != nil || appDataErr != nil {
-		return
-	}
-	if path := developmentUserDataPath(executable, appData); path != "" {
-		if os.MkdirAll(path, 0o755) == nil {
-			mygo.App.SetPath(mygo.PathUserData, path)
-		}
-	}
-}
-
 func developmentUserDataPath(executable, appData string) string {
 	name := strings.TrimSuffix(filepath.Base(executable), ".exe")
 	if !strings.HasSuffix(name, " Dev") {
 		return ""
 	}
-	return filepath.Join(appData, "Vitals Dev")
+	return filepath.Join(appData, appName+" Dev")
 }

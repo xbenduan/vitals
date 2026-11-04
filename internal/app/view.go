@@ -1,7 +1,7 @@
 package app
 
 import (
-	"vitals/internal/clipboard"
+	"clipnest/internal/clipboard"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -24,6 +24,8 @@ func (a *application) view(c *ui.Context) {
 			c.OnShortcut(primaryModifier(), ui.KeyE, a.editSelected)
 			c.OnShortcut(primaryModifier(), ui.KeyD, a.favoriteSelected)
 			if !a.searchHandle.Focused(c) {
+				c.OnShortcut(0, ui.KeyLeft, func() { a.selectHistoryTab(a.tab - 1) })
+				c.OnShortcut(0, ui.KeyRight, func() { a.selectHistoryTab(a.tab + 1) })
 				for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 					c.OnShortcut(0, key, func() { a.pasteNumber(i) })
 				}
@@ -86,7 +88,7 @@ func (a *application) header(c *ui.Context) {
 		ui.Box(c).Size(29, 29).Radius(9).Background(lavender).Center().Children(func() {
 			ui.Icon(c, iconClipboard).Size(20, 20).TextColor(accent)
 		})
-		ui.Text(c, "Clipboard").FontSize(16).FontWeight(650).Grow(1)
+		ui.Text(c, appTitle).FontSize(16).FontWeight(650).Grow(1)
 		label, icon, tint := "正在监听", iconListen, ui.Hex("#6F9B85")
 		if a.settings.Paused {
 			label, icon, tint = "已暂停", iconPause, muted
@@ -117,7 +119,7 @@ func (a *application) footer(c *ui.Context) {
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		if a.settingsOpen {
 			ui.Text(c, "Esc 返回").FontSize(10).TextColor(muted).Grow(1)
-			ui.Text(c, "Clipboard").FontSize(10).TextColor(muted)
+			ui.Text(c, appTitle).FontSize(10).TextColor(muted)
 		} else if a.detail != nil {
 			ui.Text(c, "Esc 返回").FontSize(10).TextColor(muted).Grow(1)
 			if a.detail.Kind == clipboard.KindText {

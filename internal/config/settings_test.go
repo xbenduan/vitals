@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"vitals/internal/translation"
+	"clipnest/internal/translation"
 )
 
 func TestSettingsRoundTrip(t *testing.T) {

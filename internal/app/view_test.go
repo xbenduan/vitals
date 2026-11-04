@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/platform"
-	"vitals/internal/translation"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/platform"
+	"clipnest/internal/translation"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -38,7 +38,7 @@ func previewApplication() *application {
 func TestCompactPanelSearchAndTabs(t *testing.T) {
 	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"Clipboard", "正在监听", "全部", "文字", "文件", "收藏", "2026-11-04 14:23:08"} {
+	for _, text := range []string{"拾贴 · ClipNest", "正在监听", "全部", "文字", "文件", "收藏", "2026-11-04 14:23:08"} {
 		if !tester.HasText(text) {
 			t.Fatalf("missing %q: %q", text, tester.Texts())
 		}
@@ -118,7 +118,7 @@ func TestClickPastesImmediatelyAndRightClickEdits(t *testing.T) {
 	}
 	tester.Frame()
 	tester.Frame()
-	if app.detail == nil || app.detail.ID != "one" || !tester.HasText("编辑文字") || tester.HasText("删除记录") || tester.HasText("Clipboard") {
+	if app.detail == nil || app.detail.ID != "one" || !tester.HasText("编辑文字") || tester.HasText("删除记录") || tester.HasText("拾贴 · ClipNest") {
 		t.Fatal("context menu must open the editor with a secondary-page header")
 	}
 	_ = tester.Click("返回历史")
@@ -363,9 +363,9 @@ func TestKeyboardSelectionAndPause(t *testing.T) {
 }
 
 func TestRenderClipboardStates(t *testing.T) {
-	dir := os.Getenv("VITALS_PREVIEW_DIR")
+	dir := os.Getenv("CLIPNEST_PREVIEW_DIR")
 	if dir == "" {
-		t.Skip("set VITALS_PREVIEW_DIR to export design previews")
+		t.Skip("set CLIPNEST_PREVIEW_DIR to export design previews")
 	}
 	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)

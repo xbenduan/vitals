@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"slices"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/config"
-	"vitals/internal/platform"
-	"vitals/internal/translation"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/config"
+	"clipnest/internal/platform"
+	"clipnest/internal/translation"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -120,7 +120,6 @@ func (a *application) ready() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Keep the old system-monitor settings separate from the clipboard app.
 	a.settingsPath = filepath.Join(dir, "clipboard-settings.json")
 	settingsLoaded := false
 	if settings, err := config.Load(a.settingsPath); err == nil {
@@ -142,13 +141,13 @@ func (a *application) ready() {
 	a.target = a.native.Frontmost()
 	a.lastChange = a.native.ChangeCount()
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon: menuBarIcon(), IconIsTemplate: runtime.GOOS == "darwin", ToolTip: "Clipboard",
+		Icon: menuBarIcon(), IconIsTemplate: runtime.GOOS == "darwin", ToolTip: appTitle,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: "Clipboard", Width: panelWidth, Height: panelHeight,
+		Title: appTitle, Width: panelWidth, Height: panelHeight,
 		Hidden: true, Frameless: true, Transparent: true,
 		DisableResize: true, DisableMove: true, DisableMinimize: true,
 		DisableMaximize: true, DisableFullScreen: true, AlwaysOnTop: true,

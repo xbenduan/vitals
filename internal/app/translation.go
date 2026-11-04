@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/translation"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/translation"
 )
 
 func (a *application) cancelTranslation() {

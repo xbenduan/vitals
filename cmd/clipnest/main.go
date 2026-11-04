@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"vitals/internal/app"
+	"clipnest/internal/app"
 )
 
 func main() {

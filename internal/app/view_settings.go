@@ -4,9 +4,9 @@ import (
 	"runtime"
 	"strconv"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/config"
-	"vitals/internal/translation"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/config"
+	"clipnest/internal/translation"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"

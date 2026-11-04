@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"vitals/internal/clipboard"
+	"clipnest/internal/clipboard"
 
 	"github.com/egoist/mygo/ui"
 )
+
+var historyTabs = [...]string{"全部", "文字", "文件", "收藏"}
 
 func (a *application) historyView(c *ui.Context) {
 	ui.Row(c).Margin(0, 14, 10).Height(35).Shrink(0).Radius(9).Border(1, hairline).
@@ -29,7 +31,7 @@ func (a *application) historyView(c *ui.Context) {
 		}
 	})
 	ui.Row(c).Margin(0, 14, 8).Height(29).Shrink(0).Gap(5).AlignItems(ui.Center).Children(func() {
-		for tab, label := range []string{"全部", "文字", "文件", "收藏"} {
+		for tab, label := range historyTabs {
 			button := ui.ButtonBase(c.Key(label)).Padding(5, 11).Radius(8).Gap(5).
 				Label(label).TextColor(muted).AlignItems(ui.Center)
 			if a.tab == tab {
@@ -42,13 +44,7 @@ func (a *application) historyView(c *ui.Context) {
 				if a.tab == tab {
 					ui.Text(c, fmt.Sprint(len(clipboard.Filter(a.entries, tab, "")))).FontSize(10).TextColor(accent.Alpha(.75))
 				}
-			}).OnClick(func() {
-				a.cancelPending()
-				a.tab = tab
-				a.selected = 0
-				a.list.ScrollTo(0, ui.Start)
-				a.historyHandle.Focus()
-			})
+			}).OnClick(func() { a.selectHistoryTab(tab) })
 		}
 	})
 	items := clipboard.Filter(a.entries, a.tab, a.query)
@@ -174,6 +170,14 @@ func (a *application) entryIcon(c *ui.Context, entry clipboard.Entry) {
 		}
 		ui.Icon(c, icon).Size(22, 22).TextColor(tint)
 	})
+}
+
+func (a *application) selectHistoryTab(tab int) {
+	a.cancelPending()
+	a.tab = (tab + len(historyTabs)) % len(historyTabs)
+	a.selected = 0
+	a.list.ScrollTo(0, ui.Start)
+	a.historyHandle.Focus()
 }
 
 func (a *application) moveSelection(delta int) {

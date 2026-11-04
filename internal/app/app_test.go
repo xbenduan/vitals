@@ -7,18 +7,18 @@ import (
 	"path/filepath"
 	"testing"
 
-	"vitals/internal/clipboard"
-	"vitals/internal/translation"
+	"clipnest/internal/clipboard"
+	"clipnest/internal/translation"
 
 	"github.com/egoist/mygo"
 )
 
 func TestDevelopmentUserDataPath(t *testing.T) {
 	appData := "/Users/example/Library/Application Support"
-	if got := developmentUserDataPath("/tmp/Vitals Dev.app/Contents/MacOS/Vitals Dev", appData); got != filepath.Join(appData, "Vitals Dev") {
+	if got := developmentUserDataPath("/tmp/ClipNest Dev.app/Contents/MacOS/ClipNest Dev", appData); got != filepath.Join(appData, "ClipNest Dev") {
 		t.Fatalf("development data path = %q", got)
 	}
-	if got := developmentUserDataPath("/Applications/Vitals.app/Contents/MacOS/Vitals", appData); got != "" {
+	if got := developmentUserDataPath("/Applications/ClipNest.app/Contents/MacOS/ClipNest", appData); got != "" {
 		t.Fatalf("production data path = %q, want empty", got)
 	}
 }

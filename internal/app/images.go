@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"vitals/internal/clipboard"
+	"clipnest/internal/clipboard"
 
 	"github.com/egoist/mygo/ui"
 	xdraw "golang.org/x/image/draw"

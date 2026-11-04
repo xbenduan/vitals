@@ -112,7 +112,7 @@ func (b *Bridge) ModifiersReleased() bool {
 // Success means the events were sent, not that the target accepted the content.
 func (b *Bridge) Paste(target Target) error {
 	if !b.trusted() {
-		return errors.New("请在系统设置中允许 Vitals 使用「辅助功能」，以便自动粘贴")
+		return errors.New("请在系统设置中允许拾贴（ClipNest）使用「辅助功能」，以便自动粘贴")
 	}
 	if !b.Frontmost().Matches(target) {
 		return errors.New("目标应用没有获得焦点，内容已复制，可使用 ⌘V 粘贴")
@@ -125,7 +125,7 @@ func (b *Bridge) Paste(target Target) error {
 // editor line when Accessibility explicitly reports that nothing is selected.
 func (b *Bridge) SelectedText(target Target) (text string, supported bool, err error) {
 	if !b.Trusted() {
-		return "", false, errors.New("请在系统设置中允许 Vitals 使用「辅助功能」，以便读取选中文字")
+		return "", false, errors.New("请在系统设置中允许拾贴（ClipNest）使用「辅助功能」，以便读取选中文字")
 	}
 	if !b.Frontmost().Matches(target) {
 		return "", false, errors.New("原应用已失去焦点，请重新选择文字后使用快捷键")
@@ -168,7 +168,7 @@ func (b *Bridge) SelectedText(target Target) (text string, supported bool, err e
 // Copy asks the still-focused source app to copy its selection after modifiers settle.
 func (b *Bridge) Copy(target Target) error {
 	if !b.Trusted() {
-		return errors.New("请允许 Vitals 使用「辅助功能」以读取选中文字")
+		return errors.New("请允许拾贴（ClipNest）使用「辅助功能」以读取选中文字")
 	}
 	if !b.Frontmost().Matches(target) || !b.ModifiersReleased() {
 		return errors.New("原应用或按键状态已改变，请重新划词后使用快捷键")

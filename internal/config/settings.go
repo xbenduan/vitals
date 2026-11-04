@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"vitals/internal/atomicfile"
-	"vitals/internal/translation"
+	"clipnest/internal/atomicfile"
+	"clipnest/internal/translation"
 )
 
 // Settings holds user preferences; OpenAtLogin is read from the OS, not persisted.

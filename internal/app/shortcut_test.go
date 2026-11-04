@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"vitals/internal/config"
-	"vitals/internal/translation"
+	"clipnest/internal/config"
+	"clipnest/internal/translation"
 
 	"github.com/egoist/mygo/ui"
 )

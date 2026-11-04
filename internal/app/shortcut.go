@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"vitals/internal/config"
+	"clipnest/internal/config"
 
 	"github.com/egoist/mygo/ui"
 )

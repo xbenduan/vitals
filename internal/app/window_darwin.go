@@ -1,7 +1,7 @@
 package app
 
 import (
-	"vitals/internal/platform"
+	"clipnest/internal/platform"
 
 	"github.com/egoist/mygo"
 )

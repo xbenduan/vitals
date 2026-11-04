@@ -1,13 +1,15 @@
-# Vitals · 剪贴板
+# 拾贴 · ClipNest
+
+**复制过的，随时找回。**
 
 使用 Go + MyGo 渲染的 macOS / Windows 托盘剪贴板应用，无 HTML、JavaScript 或 WebView UI，支持 `CGO_ENABLED=0` 构建。macOS 通过 purego 调用原生 API，Windows 通过 Win32 API 处理剪贴板变化、窗口定位和自动粘贴。
 
 | 系统 | 安装包 | 默认呼出快捷键 |
 | --- | --- | --- |
-| macOS 13+（Apple Silicon / Intel） | `build/darwin-universal/Vitals 0.5.0.dmg`，拖入 Applications | `Command + Shift + V` |
-| Windows 10 1803+ / 11（x64） | `build/windows-amd64/Vitals Setup 0.5.0.exe` | `Ctrl + Shift + V` |
+| macOS 13+（Apple Silicon / Intel） | `build/darwin-universal/ClipNest 0.5.0.dmg`，拖入 Applications | `Command + Shift + V` |
+| Windows 10 1803+ / 11（x64） | `build/windows-amd64/ClipNest Setup 0.5.0.exe` | `Ctrl + Shift + V` |
 
-Windows 也可直接运行同目录的 `Vitals.exe`。安装包按当前用户安装，无需管理员权限。本地构建未配置发行签名：macOS 包采用 ad-hoc 签名，未公证；Windows 包未进行 Authenticode 签名。
+Windows 也可直接运行同目录的 `ClipNest.exe`。安装包按当前用户安装，无需管理员权限。本地构建未配置发行签名：macOS 包采用 ad-hoc 签名，未公证；Windows 包未进行 Authenticode 签名。
 
 ## 使用
 
@@ -21,9 +23,9 @@ Windows 也可直接运行同目录的 `Vitals.exe`。安装包按当前用户�
 - 按 `1`–`9` 粘贴当前分类和搜索结果中的前九项，编号显示在记录右侧；按 `Enter` 粘贴当前选中项。输入框内数字正常输入，`↓` / `↑` 可从搜索框回到列表。
 - 星标收藏；记录时间精确到秒。重复内容会合并并更新复制时间，收藏状态保留。
 - 点击「正在监听」可暂停；恢复后从下一次复制开始记录。
-- 首页显示图标和 Clipboard；设置、编辑、翻译和预览共用同一个面板，页头提供返回和页面标题。
+- 首页显示图标和「拾贴 · ClipNest」；设置、编辑、翻译和预览共用同一个面板，页头提供返回和页面标题。
 
-macOS 首次使用自动粘贴或划词翻译时，在设置中点击「打开辅助功能设置」，允许当前 Vitals 应用。未授权时仍可记录和复制，也可在历史记录中右键文字进行翻译。
+macOS 首次使用自动粘贴或划词翻译时，在设置中点击「打开辅助功能设置」，允许当前 ClipNest 应用。未授权时仍可记录和复制，也可在历史记录中右键文字进行翻译。
 
 Windows 自动粘贴会恢复原窗口并发送 `Ctrl + V`，不会只按进程切换到同一应用的另一个窗口。Windows 可能拒绝向以管理员身份运行的目标程序注入按键，或拒绝恢复前台焦点；此时内容仍在剪贴板中，可切回目标窗口手动粘贴。
 
@@ -34,6 +36,7 @@ Windows 自动粘贴会恢复原窗口并发送 `Ctrl + V`，不会只按进程�
 | macOS | Windows | 操作 |
 | --- | --- | --- |
 | `↑` / `↓` | `↑` / `↓` | 选择记录 |
+| `←` / `→` | `←` / `→` | 循环切换全部 / 文字 / 文件 / 收藏，保留搜索条件并选中首条（输入框内不触发） |
 | `Enter` | `Enter` | 粘贴选中记录 |
 | `1`–`9` | `1`–`9` | 粘贴当前筛选结果的第 1–9 项（输入框内不触发） |
 | `Command + F` | `Ctrl + F` | 搜索 |
@@ -77,8 +80,12 @@ macOS 优先通过 Accessibility 读取当前选区；目标应用不提供选�
 
 数据目录：
 
-- macOS：`~/Library/Application Support/Vitals/`
-- Windows：`%APPDATA%\Vitals\`
+- macOS：`~/Library/Application Support/ClipNest/`
+- Windows：`%APPDATA%\ClipNest\`
+
+从旧版 Vitals 升级时，先退出旧版，再启动 ClipNest。若新数据目录尚不存在，首次启动会自动复制同一位置旧版 `Vitals` 目录中的剪贴板设置、历史、收藏和图片；开发版对应从 `Vitals Dev` 迁移到 `ClipNest Dev`。复制完成后才启用新目录，失败会保留原数据并停止启动；已有 ClipNest 数据不会被覆盖，旧目录也会保留。
+
+应用标识已改为 `dev.clipnest.app`。macOS 辅助功能权限需为 ClipNest 重新授权；若启用了登录启动，请关闭旧版的登录启动，并在 ClipNest 设置中重新开启。
 
 目录内包含：
 
@@ -97,11 +104,12 @@ macOS 优先通过 Accessibility 读取当前选区；目标应用不提供选�
 采用 Go 常用的 `cmd` + `internal` 布局，测试放在被测代码所在的包中：
 
 ```text
-cmd/vitals/
+cmd/clipnest/
   main.go                  # 程序入口
 internal/
   app/                     # 应用编排、MyGo 界面与交互状态
     run.go                 # 事件循环与开发环境初始化
+    userdata.go            # 数据目录初始化与旧版数据迁移
     app.go                 # 应用生命周期与串行存储任务
     window*.go             # 面板显示、隐藏及鼠标附近定位
     clipboard.go           # 监听、编辑、自动粘贴
@@ -121,7 +129,7 @@ resources/                 # 应用图标等构建资源
 mygo.json                  # MyGo 开发与打包配置
 ```
 
-依赖方向为 `cmd/vitals → app → clipboard / config / translation / platform`，
+Go module 为 `clipnest`，依赖方向为 `cmd/clipnest → app → clipboard / config / translation / platform`，
 `config` 使用 `translation.Config`，与 `clipboard` 共用 `atomicfile`。存储、配置和翻译客户端不依赖 MyGo；
 界面状态集中在 `app` 的主线程，存储由单独的串行 worker 管理，
 通过 `Window.Update` 回传只读快照。翻译请求独立于存储 worker，通过可取消的 context 和请求序号防止过期响应覆盖页面。页面按文件拆分，复用同一份私有应用状态。
@@ -137,10 +145,10 @@ go tool mygo dev
 应用默认只显示状态栏 / 托盘图标。直接运行程序时可传入 `--show` 在鼠标附近展开面板。
 
 ```bash
-go run ./cmd/vitals --show
+go run ./cmd/clipnest --show
 ```
 
-`mygo.json` 的 `main` 指向 `./cmd/vitals`，开发和打包命令仍从仓库根目录执行。
+`mygo.json` 的 `main` 指向 `./cmd/clipnest`，开发和打包命令仍从仓库根目录执行。
 
 ```bash
 CGO_ENABLED=0 go test ./...
@@ -155,7 +163,7 @@ go tool mygo build
 go tool mygo build -platform darwin/universal,windows/amd64
 ```
 
-产物分别位于 `build/darwin-universal/`、`build/windows-amd64/`，包含 `.app` / `.dmg` 和 `.exe` / 安装程序。开发包使用独立的 `Vitals Dev` 数据目录。全局快捷键和 macOS 辅助功能权限绑定当前运行的应用；验证自动粘贴时，请为实际运行的构建包授权。
+产物分别位于 `build/darwin-universal/`、`build/windows-amd64/`，包含 `.app` / `.dmg` 和 `.exe` / 安装程序。开发包使用独立的 `ClipNest Dev` 数据目录。全局快捷键和 macOS 辅助功能权限绑定当前运行的应用；验证自动粘贴时，请为实际运行的构建包授权。
 
 UI 使用 MyGo `ui.NewTester` 验证搜索、分类、右键菜单、即时粘贴、数字快捷键、两个入口复用翻译页、原文只读与复制、译文编辑、底部操作位置、设置返回保留内容、空选区恢复及快捷键录制；合成桌面测试验证划词获取、按键释放、旧剪贴板拒绝、格式恢复及焦点变化。平台测试覆盖边缘避让、负坐标显示器、缩放工作区、小屏收缩及目标窗口身份。存储测试覆盖去重、收藏、保留条数、图片清理、磁盘写入失败及损坏文件。HTTP 测试使用本地测试服务验证 TranSmart 认证、语言识别和翻译方向、输入与响应上限、错误响应及两个请求阶段的取消；配置测试验证旧配置迁移及适用平台的凭据文件权限。
 

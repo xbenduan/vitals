@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"vitals/internal/clipboard"
+	"clipnest/internal/clipboard"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
