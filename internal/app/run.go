@@ -24,6 +24,11 @@ func Run() error {
 			app.showWindow()
 		}
 	})
+	mygo.App.OnActivate(func(_ bool) {
+		if app.win != nil && !app.quitting {
+			app.showWindow()
+		}
+	})
 	if runtime.GOOS == "darwin" {
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	}

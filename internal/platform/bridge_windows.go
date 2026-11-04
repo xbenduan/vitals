@@ -155,11 +155,31 @@ func (b *Bridge) Paste(target Target) error {
 	if !b.Frontmost().Matches(target) || !b.ModifiersReleased() {
 		return errors.New("目标窗口或按键状态已改变，内容已复制，可使用 Ctrl+V 粘贴")
 	}
+	if err := b.controlKey(0x56); err != nil {
+		return errors.New("Windows 未允许自动粘贴，内容已复制，可使用 Ctrl+V 粘贴")
+	}
+	return nil
+}
+
+// SelectedText delegates Windows selection capture to the guarded copy fallback.
+func (b *Bridge) SelectedText(target Target) (string, bool, error) {
+	return "", false, nil
+}
+
+// Copy sends Ctrl+C to the original foreground window once all modifiers are released.
+func (b *Bridge) Copy(target Target) error {
+	if !b.Frontmost().Matches(target) || !b.ModifiersReleased() {
+		return errors.New("原窗口或按键状态已改变，请重新划词后使用快捷键")
+	}
+	return b.controlKey(0x43)
+}
+
+func (b *Bridge) controlKey(key uint16) error {
 	const keyUp = 0x0002
 	events := [...]keyboardEvent{
 		{kind: 1, key: 0x11}, // VK_CONTROL down
-		{kind: 1, key: 0x56}, // V down
-		{kind: 1, key: 0x56, flags: keyUp},
+		{kind: 1, key: key},
+		{kind: 1, key: key, flags: keyUp},
 		{kind: 1, key: 0x11, flags: keyUp},
 	}
 	sent, _, _ := sendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), unsafe.Sizeof(events[0]))
@@ -169,7 +189,7 @@ func (b *Bridge) Paste(target Target) error {
 			// Control held down. UIPI failures normally insert zero events.
 			sendInput.Call(2, uintptr(unsafe.Pointer(&events[2])), unsafe.Sizeof(events[0]))
 		}
-		return errors.New("Windows 未允许自动粘贴，内容已复制，可使用 Ctrl+V 粘贴")
+		return errors.New("Windows 未允许发送按键，请检查目标程序是否以管理员身份运行")
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"vitals/internal/clipboard"
 	"vitals/internal/translation"
@@ -24,26 +25,50 @@ func (a *application) translateEntry(entry clipboard.Entry) {
 	if entry.Kind != clipboard.KindText {
 		return
 	}
+	a.openTranslation(entry)
+	a.startTranslation()
+}
+
+func (a *application) openTranslation(entry clipboard.Entry) {
 	a.openEntry(entry)
+	a.settingsOpen = false
 	a.translationMode = true
+	a.translationSource = entry.Text
 	a.editDraft = ""
+	a.editorHandle.CancelFocus()
+	a.historyHandle.CancelFocus()
+	a.searchHandle.CancelFocus()
+	a.sourceHandle.Focus()
+}
+
+func (a *application) startTranslation() {
+	if !a.translationMode || a.detail == nil || a.saving {
+		return
+	}
+	a.cancelTranslation()
+	a.translationError = ""
+	if strings.TrimSpace(a.translationSource) == "" {
+		a.translationError = errNoSelection.Error()
+		return
+	}
+	source, id := a.translationSource, a.detail.ID
 	a.translating = true
 	seq := a.translationSequence
 	client, err := translation.New(a.settings.Translation)
 	if err != nil {
-		a.finishTranslation(seq, entry.ID, "", err)
+		a.finishTranslation(seq, id, "", err)
 		return
 	}
 	if a.win == nil {
-		a.finishTranslation(seq, entry.ID, "", errors.New("翻译服务尚未就绪"))
+		a.finishTranslation(seq, id, "", errors.New("翻译服务尚未就绪"))
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.translationCancel = cancel
 	go func() {
 		defer cancel()
-		text, err := client.Translate(ctx, entry.Text)
-		a.win.Update(func() { a.finishTranslation(seq, entry.ID, text, err) })
+		text, err := client.Translate(ctx, source)
+		a.win.Update(func() { a.finishTranslation(seq, id, text, err) })
 	}()
 }
 
@@ -70,6 +95,7 @@ func (a *application) finishTranslation(seq uint64, id, text string, err error) 
 	}
 	a.editDraft = text
 	a.translationError = ""
+	a.sourceHandle.CancelFocus()
 	a.editorHandle.Focus()
 }
 

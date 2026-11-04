@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"vitals/internal/clipboard"
@@ -29,7 +30,7 @@ func (a *application) monitorLoop() {
 }
 
 func (a *application) pollClipboard() {
-	if a.quitting {
+	if a.quitting || a.selectionCapture != nil {
 		return
 	}
 	front := a.native.Frontmost()
@@ -91,6 +92,7 @@ func (a *application) pollClipboard() {
 func (a *application) cancelPending() {
 	a.actionSequence++
 	a.pasting = false
+	a.selectionCapture = nil
 }
 
 func (a *application) clickEntry(entry clipboard.Entry, index int) {
@@ -102,7 +104,9 @@ func (a *application) openEntry(entry clipboard.Entry) {
 	a.cancelPending()
 	a.cancelTranslation()
 	a.translationMode = false
+	a.translationSource = ""
 	a.translationError = ""
+	a.sourceHandle.CancelFocus()
 	a.detail = &entry
 	a.editDraft = entry.Text
 	a.message = ""
@@ -112,24 +116,35 @@ func (a *application) openEntry(entry clipboard.Entry) {
 }
 
 func (a *application) saveEdit(paste bool) {
-	if a.detail == nil || a.detail.Kind != clipboard.KindText || a.saving || a.translating || a.translationError != "" {
+	if a.detail == nil || a.detail.Kind != clipboard.KindText || a.saving || a.translating || strings.TrimSpace(a.editDraft) == "" {
 		return
 	}
-	entry, draft, limit := *a.detail, a.editDraft, a.settings.HistoryLimit
+	detail := a.detail
+	entry, draft, limit := *detail, a.editDraft, a.settings.HistoryLimit
 	translated := a.translationMode
 	a.saving = true
 	a.mutate(func(store *clipboard.Store) error {
 		return saveText(store, entry, draft, limit, translated)
 	}, func() {
-		a.saving = false
-		a.detail = nil
-		a.translationMode = false
-		a.historyHandle.Focus()
-		if paste {
-			entry.Text = draft
-			a.pasteEntry(entry)
-		}
+		a.finishEdit(detail, draft, paste)
 	})
+}
+
+func (a *application) finishEdit(detail *clipboard.Entry, draft string, paste bool) {
+	a.saving = false
+	// The write still completes after reopening, but its old editor must not
+	// close a new page, move focus, or start a paste in the new session.
+	if a.detail != detail {
+		return
+	}
+	a.detail = nil
+	a.translationMode = false
+	a.historyHandle.Focus()
+	if paste {
+		entry := *detail
+		entry.Text = draft
+		a.pasteEntry(entry)
+	}
 }
 
 func saveText(store *clipboard.Store, entry clipboard.Entry, draft string, limit int, translated bool) error {

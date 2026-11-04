@@ -20,6 +20,12 @@ type Bridge struct {
 	postToPID func(int32, uintptr)
 	release   func(uintptr)
 	keyState  func(int32, uint16) bool
+	axApp     func(int32) uintptr
+	axCopy    func(uintptr, uintptr, *uintptr) int32
+	axTimeout func(uintptr, float32) int32
+	cfString  func(uintptr, string, uint32) uintptr
+	typeID    func(uintptr) uintptr
+	stringID  func() uintptr
 }
 
 // NewBridge loads macOS frameworks and binds the native functions.
@@ -43,6 +49,12 @@ func NewBridge() (*Bridge, error) {
 	purego.RegisterLibFunc(&b.postToPID, cg, "CGEventPostToPid")
 	purego.RegisterLibFunc(&b.keyState, cg, "CGEventSourceKeyState")
 	purego.RegisterLibFunc(&b.release, cf, "CFRelease")
+	purego.RegisterLibFunc(&b.axApp, ax, "AXUIElementCreateApplication")
+	purego.RegisterLibFunc(&b.axCopy, ax, "AXUIElementCopyAttributeValue")
+	purego.RegisterLibFunc(&b.axTimeout, ax, "AXUIElementSetMessagingTimeout")
+	purego.RegisterLibFunc(&b.cfString, cf, "CFStringCreateWithCString")
+	purego.RegisterLibFunc(&b.typeID, cf, "CFGetTypeID")
+	purego.RegisterLibFunc(&b.stringID, cf, "CFStringGetTypeID")
 	return b, nil
 }
 
@@ -105,7 +117,67 @@ func (b *Bridge) Paste(target Target) error {
 	if !b.Frontmost().Matches(target) {
 		return errors.New("目标应用没有获得焦点，内容已复制，可使用 ⌘V 粘贴")
 	}
-	down, up := b.createKey(0, 9, true), b.createKey(0, 9, false)
+	return b.commandKey(target, 9)
+}
+
+// SelectedText reads the focused accessibility element without touching the clipboard.
+// Supported is true even for an empty selection, so callers must not copy a whole
+// editor line when Accessibility explicitly reports that nothing is selected.
+func (b *Bridge) SelectedText(target Target) (text string, supported bool, err error) {
+	if !b.Trusted() {
+		return "", false, errors.New("请在系统设置中允许 Vitals 使用「辅助功能」，以便读取选中文字")
+	}
+	if !b.Frontmost().Matches(target) {
+		return "", false, errors.New("原应用已失去焦点，请重新选择文字后使用快捷键")
+	}
+	app := b.axApp(int32(target.PID))
+	if app == 0 {
+		return "", false, nil
+	}
+	defer b.release(app)
+	b.axTimeout(app, 0.2)
+	copyAttribute := func(element uintptr, name string) uintptr {
+		key := b.cfString(0, name, 0x08000100) // kCFStringEncodingUTF8
+		if key == 0 {
+			return 0
+		}
+		defer b.release(key)
+		var value uintptr
+		if b.axCopy(element, key, &value) != 0 {
+			return 0
+		}
+		return value
+	}
+	focused := copyAttribute(app, "AXFocusedUIElement")
+	if focused == 0 {
+		return "", false, nil
+	}
+	defer b.release(focused)
+	b.axTimeout(focused, 0.2)
+	value := copyAttribute(focused, "AXSelectedText")
+	if value == 0 {
+		return "", false, nil
+	}
+	defer b.release(value)
+	if b.typeID(value) != b.stringID() {
+		return "", false, nil
+	}
+	return nativeString(objc.ID(value)), true, nil
+}
+
+// Copy asks the still-focused source app to copy its selection after modifiers settle.
+func (b *Bridge) Copy(target Target) error {
+	if !b.Trusted() {
+		return errors.New("请允许 Vitals 使用「辅助功能」以读取选中文字")
+	}
+	if !b.Frontmost().Matches(target) || !b.ModifiersReleased() {
+		return errors.New("原应用或按键状态已改变，请重新划词后使用快捷键")
+	}
+	return b.commandKey(target, 8)
+}
+
+func (b *Bridge) commandKey(target Target, key uint16) error {
+	down, up := b.createKey(0, key, true), b.createKey(0, key, false)
 	if down == 0 || up == 0 {
 		if down != 0 {
 			b.release(down)
@@ -113,7 +185,7 @@ func (b *Bridge) Paste(target Target) error {
 		if up != 0 {
 			b.release(up)
 		}
-		return errors.New("无法创建粘贴按键事件")
+		return errors.New("无法创建按键事件")
 	}
 	defer b.release(down)
 	defer b.release(up)

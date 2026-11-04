@@ -32,16 +32,17 @@ type application struct {
 	native   *platform.Bridge
 	quitting bool
 
-	settings          config.Settings
-	settingsPath      string
-	settingsOpen      bool
-	settingsTab       int
-	shortcutDraft     string
-	shortcutActive    string
-	shortcutSuspended bool
-	limitChoice       string
-	recording         bool
-	trusted           bool
+	settings                 config.Settings
+	settingsPath             string
+	settingsOpen             bool
+	settingsTab              int
+	shortcutDraft            string
+	shortcutActive           string
+	shortcutSuspended        bool
+	translationShortcutError string
+	limitChoice              string
+	recording                bool
+	trusted                  bool
 
 	entries       []clipboard.Entry
 	loading       bool
@@ -53,6 +54,7 @@ type application struct {
 	searchHandle  ui.Handle
 	historyHandle ui.Handle
 	editorHandle  ui.Handle
+	sourceHandle  ui.Handle
 	detail        *clipboard.Entry
 	editDraft     string
 	saving        bool
@@ -63,6 +65,7 @@ type application struct {
 
 	translationDraft         translation.Config
 	translationMode          bool
+	translationSource        string
 	translating              bool
 	translationError         string
 	translationCancel        context.CancelFunc
@@ -72,19 +75,20 @@ type application struct {
 	translationCheckCancel   context.CancelFunc
 	translationCheckSequence uint64
 
-	images         map[string]*ui.Bitmap
-	imageRequested map[string]bool
-	imageErrors    map[string]string
-	previewID      string
-	previewImage   *ui.Bitmap
-	previewError   string
-	jobs           chan func(*clipboard.Store)
-	done           chan struct{}
-	workerDone     chan struct{}
-	lastChange     int
-	target         platform.Target
-	actionSequence uint64
-	pasting        bool
+	images           map[string]*ui.Bitmap
+	imageRequested   map[string]bool
+	imageErrors      map[string]string
+	previewID        string
+	previewImage     *ui.Bitmap
+	previewError     string
+	jobs             chan func(*clipboard.Store)
+	done             chan struct{}
+	workerDone       chan struct{}
+	lastChange       int
+	target           platform.Target
+	actionSequence   uint64
+	pasting          bool
+	selectionCapture *selectionCapture
 }
 
 func newApplication() *application {
@@ -150,6 +154,17 @@ func (a *application) ready() {
 	a.win.OnFocus(func() { a.trusted = a.native.Trusted(); a.win.Invalidate() })
 	a.tray.OnClick(a.toggleWindow)
 	a.tray.OnRightClick(a.toggleWindow)
+	// Reserve selected-text translation before registering the configurable
+	// history shortcut. Older settings may already use this combination.
+	if err := mygo.GlobalShortcut.Register(translationShortcut(), a.translateSelection); err != nil {
+		a.translationShortcutError = "划词翻译快捷键注册失败，请检查是否被其他应用占用"
+		a.message = a.translationShortcutError
+	}
+	if shortcut, _ := normalizeShortcut(a.settings.Shortcut); shortcut == translationShortcut() {
+		a.settings.Shortcut = config.DefaultShortcut
+		a.shortcutDraft = a.settings.Shortcut
+		a.message = "划词翻译使用 " + shortcutLabel(translationShortcut()) + "，打开历史已恢复默认快捷键"
+	}
 	if err := mygo.GlobalShortcut.Register(a.settings.Shortcut, a.toggleWindow); err != nil {
 		a.message = "快捷键注册失败，请在设置中更换组合：" + err.Error()
 	} else {

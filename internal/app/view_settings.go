@@ -57,6 +57,15 @@ func (a *application) settingsView(c *ui.Context) {
 				ui.Button(c, "恢复默认").Height(28).OnClick(func() { a.shortcutDraft = config.DefaultShortcut; a.applyShortcut() })
 				ui.PrimaryButton(c, "保存快捷键").Height(28).Disabled(a.recording).OnClick(a.applyShortcut)
 			})
+			ui.Divider(c)
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "划词翻译").FontSize(11).Grow(1)
+				ui.Text(c, shortcutLabel(translationShortcut())).FontSize(11).TextColor(accent)
+			})
+			ui.Text(c, "在其他应用中选中文字，按快捷键直接翻译。").FontSize(10).TextColor(muted)
+			if a.translationShortcutError != "" {
+				ui.Text(c, a.translationShortcutError).FontSize(10).TextColor(c.Theme().Danger).MaxLines(2)
+			}
 		})
 		settingsGroup(c, func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {

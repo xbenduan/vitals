@@ -58,7 +58,11 @@ func (a *application) view(c *ui.Context) {
 func (a *application) header(c *ui.Context) {
 	ui.Row(c).Height(53).Shrink(0).Padding(0, 16).Gap(9).AlignItems(ui.Center).Children(func() {
 		if a.settingsOpen || a.detail != nil {
-			iconButton(c, "返回历史", iconBack, a.back).Disabled(a.saving)
+			backLabel := "返回历史"
+			if a.settingsOpen && a.translationMode && a.detail != nil {
+				backLabel = "返回翻译"
+			}
+			iconButton(c, backLabel, iconBack, a.back).Disabled(a.saving)
 			title := "设置"
 			if !a.settingsOpen {
 				switch {
@@ -72,7 +76,10 @@ func (a *application) header(c *ui.Context) {
 			}
 			ui.Text(c, title).FontSize(15).FontWeight(650).Grow(1)
 			if a.translationMode && !a.settingsOpen {
-				ui.Text(c, "原文保留").FontSize(10).TextColor(muted)
+				iconButton(c, "翻译设置", iconSettings, func() {
+					a.openSettings()
+					a.settingsTab = 1
+				}).Disabled(a.saving)
 			}
 			return
 		}
@@ -150,5 +157,9 @@ func (a *application) back() {
 		return
 	}
 	a.message = ""
+	if a.translationMode && a.detail != nil {
+		a.editorHandle.Focus()
+		return
+	}
 	a.historyHandle.Focus()
 }

@@ -351,7 +351,7 @@ func TestRenderClipboardStates(t *testing.T) {
 	app.openEntry(app.entries[0])
 	tester.Frame()
 	save("editor")
-	app.translationMode = true
+	app.openTranslation(app.entries[0])
 	app.editDraft = "Keep your ideas close at hand, ready to pick up where you left off."
 	tester.Frame()
 	save("translation")
@@ -359,6 +359,13 @@ func TestRenderClipboardStates(t *testing.T) {
 	tester.Frame()
 	save("translation-loading")
 	app.translating = false
+	app.translationError = "请在翻译设置中填写腾讯交互翻译的 User 和 Token"
+	tester.Frame()
+	save("translation-error")
+	app.openSelectionTranslation("", errNoSelection)
+	tester.Frame()
+	save("translation-empty")
+	app.translationError = ""
 	app.translationMode = false
 	app.detail = nil
 	app.entries = nil

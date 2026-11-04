@@ -19,6 +19,13 @@ func primaryModifier() ui.Modifiers {
 	return ui.Ctrl
 }
 
+func translationShortcut() string {
+	if runtime.GOOS == "darwin" {
+		return "Command+Shift+F"
+	}
+	return "Control+Shift+F"
+}
+
 func primaryShortcutLabel(key string) string {
 	if runtime.GOOS == "darwin" {
 		return "⌘ " + key
@@ -139,6 +146,10 @@ func (a *application) applyShortcut() {
 	shortcut, err := normalizeShortcut(a.shortcutDraft)
 	if err != nil {
 		a.message = err.Error()
+		return
+	}
+	if shortcut == translationShortcut() {
+		a.message = "此组合已用于划词翻译，请为打开剪贴板选择其他快捷键"
 		return
 	}
 	if shortcut == a.shortcutActive {
