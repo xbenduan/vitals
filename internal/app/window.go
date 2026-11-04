@@ -33,16 +33,7 @@ func (a *application) showWindow() {
 		a.target = target
 	}
 	a.trusted = a.native.Trusted()
-	anchor := a.tray.Bounds()
-	if anchor.Width > 0 {
-		area := mygo.Screen.DisplayNearestPoint(mygo.Point{X: anchor.X, Y: anchor.Y}).WorkArea
-		bounds := a.win.Bounds()
-		x := max(area.X, min(anchor.X+(anchor.Width-bounds.Width)/2, area.X+area.Width-bounds.Width))
-		y := max(area.Y, min(anchor.Y+anchor.Height+6, area.Y+area.Height-bounds.Height))
-		a.win.SetPosition(x, y)
-	} else {
-		a.win.Center()
-	}
+	a.positionWindow()
 	if a.detail == nil && !a.settingsOpen {
 		a.historyHandle.Focus()
 	}

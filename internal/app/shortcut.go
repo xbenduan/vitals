@@ -3,11 +3,35 @@ package app
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
+
+	"vitals/internal/config"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+func primaryModifier() ui.Modifiers {
+	if runtime.GOOS == "darwin" {
+		return ui.Cmd
+	}
+	return ui.Ctrl
+}
+
+func primaryShortcutLabel(key string) string {
+	if runtime.GOOS == "darwin" {
+		return "⌘ " + key
+	}
+	return "Ctrl+" + key
+}
+
+func modifierNames() (command, alt string) {
+	if runtime.GOOS == "darwin" {
+		return "Command", "Option"
+	}
+	return "Win", "Alt"
+}
 
 func shortcutKeys() map[ui.Key]string {
 	keys := map[ui.Key]string{
@@ -32,14 +56,15 @@ func shortcutKeys() map[ui.Key]string {
 }
 
 func shortcutFromKey(mods ui.Modifiers, key string) (string, error) {
+	command, alt := modifierNames()
 	if mods&(ui.Cmd|ui.Ctrl|ui.Alt) == 0 {
-		return "", errors.New("请至少包含 Command、Control 或 Option")
+		return "", fmt.Errorf("请至少包含 %s、Control 或 %s", command, alt)
 	}
 	var parts []string
 	for _, modifier := range []struct {
 		mask ui.Modifiers
 		name string
-	}{{ui.Cmd, "Command"}, {ui.Ctrl, "Control"}, {ui.Alt, "Option"}, {ui.Shift, "Shift"}} {
+	}{{ui.Cmd, command}, {ui.Ctrl, "Control"}, {ui.Alt, alt}, {ui.Shift, "Shift"}} {
 		if mods&modifier.mask != 0 {
 			parts = append(parts, modifier.name)
 		}
@@ -50,12 +75,12 @@ func shortcutFromKey(mods ui.Modifiers, key string) (string, error) {
 func normalizeShortcut(value string) (string, error) {
 	parts := strings.Split(strings.TrimSpace(value), "+")
 	if len(parts) < 2 {
-		return "", errors.New("请设置一个带修饰键的快捷键，例如 Command+Shift+V")
+		return "", errors.New("请设置一个带修饰键的快捷键，例如 " + config.DefaultShortcut)
 	}
 	var mods ui.Modifiers
 	for _, part := range parts[:len(parts)-1] {
 		switch strings.ToLower(strings.TrimSpace(part)) {
-		case "command", "cmd", "super":
+		case "command", "cmd", "super", "meta", "win":
 			mods |= ui.Cmd
 		case "control", "ctrl":
 			mods |= ui.Ctrl
@@ -77,8 +102,14 @@ func normalizeShortcut(value string) (string, error) {
 }
 
 func shortcutLabel(value string) string {
+	if runtime.GOOS != "darwin" {
+		return strings.NewReplacer(
+			"Command", "Win", "Control", "Ctrl", "Option", "Alt",
+			"Space", "空格",
+		).Replace(value)
+	}
 	return strings.NewReplacer(
-		"Command", "⌘", "Control", "⌃", "Option", "⌥", "Shift", "⇧",
+		"Command", "⌘", "Win", "⌘", "Control", "⌃", "Option", "⌥", "Alt", "⌥", "Shift", "⇧",
 		"+", " ", "Space", "空格", "Enter", "↵",
 	).Replace(value)
 }

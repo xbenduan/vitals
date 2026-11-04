@@ -13,8 +13,8 @@ import (
 func (a *application) detailView(c *ui.Context) {
 	entry := *a.detail
 	if entry.Kind == clipboard.KindText {
-		c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.saveEdit(false) })
-		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() { a.saveEdit(true) })
+		c.OnShortcut(primaryModifier(), ui.KeyS, func() { a.saveEdit(false) })
+		c.OnShortcut(primaryModifier(), ui.KeyEnter, func() { a.saveEdit(true) })
 		if a.translationMode {
 			ui.Column(c).Margin(0, 16, 10).Padding(10).Radius(8).Background(lavender).Gap(5).Children(func() {
 				ui.Text(c, "原文").FontSize(10).TextColor(muted)
@@ -66,7 +66,7 @@ func (a *application) detailView(c *ui.Context) {
 			ui.Column(c).Padding(10).Gap(5).Radius(8).Background(lavender).Children(func() {
 				ui.Text(c, filepath.Base(path)).FontSize(12).SingleLine()
 				ui.Text(c, path).FontSize(10).TextColor(muted).MaxLines(2)
-				ui.Button(c, "在 Finder 中显示").OnClick(func() {
+				ui.Button(c, "在文件夹中显示").OnClick(func() {
 					mygo.Shell.ShowItemInFolder(path)
 				})
 			})

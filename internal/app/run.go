@@ -1,21 +1,32 @@
-// Package app coordinates the MyGo clipboard UI, storage worker, and macOS services.
+// Package app coordinates the MyGo clipboard UI, storage worker, and native services.
 package app
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/egoist/mygo"
 )
 
-// Run initializes the menu bar application and runs its event loop until quit.
+// Run initializes the tray application and runs its event loop until quit.
 // Call it once from the process entry point.
 func Run() error {
 	app := newApplication()
 	mygo.App.SetName("Vitals")
 	configureDevelopmentUserData()
-	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	if !mygo.App.RequestSingleInstanceLock() {
+		return nil
+	}
+	mygo.App.OnSecondInstance(func(_ []string, _ string) {
+		if app.win != nil && !app.quitting {
+			app.showWindow()
+		}
+	})
+	if runtime.GOOS == "darwin" {
+		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	}
 	mygo.App.WhenReady(app.ready)
 	mygo.App.OnWindowAllClosed(func() {})
 	return mygo.App.Run()

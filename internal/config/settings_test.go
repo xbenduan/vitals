@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -26,7 +27,11 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatal("preferences did not survive a round trip")
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows uses the user's directory ACL rather than POSIX permission bits.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("credentials require an owner-only settings file: %v", err)
 	}
 }

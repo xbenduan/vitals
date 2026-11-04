@@ -6,11 +6,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 
 	"vitals/internal/clipboard"
 	"vitals/internal/config"
-	"vitals/internal/platform/macos"
+	"vitals/internal/platform"
 	"vitals/internal/translation"
 
 	"github.com/egoist/mygo"
@@ -28,7 +29,7 @@ const (
 type application struct {
 	win      *mygo.Window
 	tray     *mygo.Tray
-	native   *macos.Bridge
+	native   *platform.Bridge
 	quitting bool
 
 	settings          config.Settings
@@ -81,7 +82,7 @@ type application struct {
 	done           chan struct{}
 	workerDone     chan struct{}
 	lastChange     int
-	target         macos.Target
+	target         platform.Target
 	actionSequence uint64
 	pasting        bool
 }
@@ -120,15 +121,15 @@ func (a *application) ready() {
 	a.limitChoice = fmt.Sprint(a.settings.HistoryLimit)
 	a.settings.OpenAtLogin = mygo.App.OpenAtLogin()
 	a.translationDraft = a.settings.Translation
-	a.native, err = macos.NewBridge()
+	a.native, err = platform.NewBridge()
 	if err != nil {
-		log.Fatal("macOS integration: ", err)
+		log.Fatal("native integration: ", err)
 	}
 	a.trusted = a.native.Trusted()
 	a.target = a.native.Frontmost()
 	a.lastChange = a.native.ChangeCount()
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon: menuBarIcon(), IconIsTemplate: true, ToolTip: "Clipboard",
+		Icon: menuBarIcon(), IconIsTemplate: runtime.GOOS == "darwin", ToolTip: "Clipboard",
 	})
 	if err != nil {
 		log.Fatal(err)

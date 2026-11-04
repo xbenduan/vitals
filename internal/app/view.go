@@ -14,15 +14,15 @@ func (a *application) view(c *ui.Context) {
 		a.recordShortcut(c)
 	} else {
 		c.OnShortcut(0, ui.KeyEscape, a.back)
-		c.OnShortcut(ui.Cmd, ui.KeyW, a.hideWindow)
-		c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
+		c.OnShortcut(primaryModifier(), ui.KeyW, a.hideWindow)
+		c.OnShortcut(primaryModifier(), ui.KeyQ, mygo.App.Quit)
 		if !a.settingsOpen && a.detail == nil && !a.confirmDelete && !a.confirmClear {
-			c.OnShortcut(ui.Cmd, ui.KeyF, func() { a.cancelPending(); a.searchHandle.Focus() })
+			c.OnShortcut(primaryModifier(), ui.KeyF, func() { a.cancelPending(); a.searchHandle.Focus() })
 			c.OnShortcut(0, ui.KeyDown, func() { a.moveSelection(1) })
 			c.OnShortcut(0, ui.KeyUp, func() { a.moveSelection(-1) })
 			c.OnShortcut(0, ui.KeyEnter, a.pasteSelected)
-			c.OnShortcut(ui.Cmd, ui.KeyE, a.editSelected)
-			c.OnShortcut(ui.Cmd, ui.KeyD, a.favoriteSelected)
+			c.OnShortcut(primaryModifier(), ui.KeyE, a.editSelected)
+			c.OnShortcut(primaryModifier(), ui.KeyD, a.favoriteSelected)
 			if !a.searchHandle.Focused(c) {
 				for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 					c.OnShortcut(0, key, func() { a.pasteNumber(i) })
@@ -114,7 +114,7 @@ func (a *application) footer(c *ui.Context) {
 		} else if a.detail != nil {
 			ui.Text(c, "Esc 返回").FontSize(10).TextColor(muted).Grow(1)
 			if a.detail.Kind == clipboard.KindText {
-				ui.Text(c, "⌘ S 保存").FontSize(10).TextColor(muted)
+				ui.Text(c, primaryShortcutLabel("S")+" 保存").FontSize(10).TextColor(muted)
 			}
 		} else {
 			ui.Text(c, "↑ ↓ 选择").FontSize(10).TextColor(muted)

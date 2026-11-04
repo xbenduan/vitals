@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"runtime"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -59,6 +60,16 @@ func iconButton(c *ui.Context, label string, icon *ui.SVG, action func()) ui.Ele
 func menuBarIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 36, 36))
 	ink := color.NRGBA{A: 255}
+	if runtime.GOOS == "windows" {
+		// Windows ignores template tinting. A fixed purple tile keeps the white
+		// clipboard readable on both light and dark notification areas.
+		for y := 1; y < 35; y++ {
+			for x := 1; x < 35; x++ {
+				img.SetNRGBA(x, y, color.NRGBA{R: 128, G: 102, B: 217, A: 255})
+			}
+		}
+		ink = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	}
 	line := func(x, y, w, h int) {
 		for dx := range w {
 			for dy := range h {

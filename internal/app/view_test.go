@@ -4,12 +4,13 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
 
 	"vitals/internal/clipboard"
-	"vitals/internal/platform/macos"
+	"vitals/internal/platform"
 	"vitals/internal/translation"
 
 	"github.com/egoist/mygo"
@@ -28,7 +29,7 @@ func previewApplication() *application {
 		{ID: "five", Kind: clipboard.KindText, Text: "周五 15:00 · 产品方案讨论\n记得带上新的界面草稿。", Source: "飞书", CopiedAt: at.Add(-8 * time.Minute), Favorite: true},
 		{ID: "six", Kind: clipboard.KindText, Text: "func main() { fmt.Println(\"Hello, clipboard\") }", Source: "TRAE CN", CopiedAt: at.Add(-11 * time.Minute)},
 	}
-	app.target = macos.Target{PID: 1234, Name: "备忘录"}
+	app.target = platform.Target{PID: 1234, Name: "备忘录"}
 	return app
 }
 
@@ -67,12 +68,12 @@ func TestCompactPanelSearchAndTabs(t *testing.T) {
 func TestEditorSurvivesRebuildAndCancel(t *testing.T) {
 	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	tester.Key(ui.Cmd, ui.KeyE)
+	tester.Key(primaryModifier(), ui.KeyE)
 	if app.detail == nil || !tester.HasText("编辑文字") {
 		t.Fatal("keyboard editing did not open")
 	}
 	_ = tester.Click("编辑内容")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.Type("修改后的内容\n第二行")
 	tester.Frame()
 	tester.Frame()
@@ -146,13 +147,21 @@ func TestSettingsAndShortcutRecording(t *testing.T) {
 		}
 	}
 	_ = tester.Click("录制")
-	tester.Key(ui.Cmd|ui.Alt, ui.KeyK)
-	if app.recording || app.shortcutDraft != "Command+Option+K" {
+	tester.Key(primaryModifier()|ui.Alt, ui.KeyK)
+	want := "Command+Option+K"
+	if runtime.GOOS == "windows" {
+		want = "Control+Alt+K"
+	}
+	if app.recording || app.shortcutDraft != want {
 		t.Fatalf("recorded shortcut = %q, recording %v", app.shortcutDraft, app.recording)
 	}
-	_ = tester.Click("打开辅助功能设置")
-	if got := tester.OpenedURLs(); len(got) != 1 || got[0] != accessibilityURL {
-		t.Fatalf("permission URL = %q", got)
+	if runtime.GOOS == "darwin" {
+		_ = tester.Click("打开辅助功能设置")
+		if got := tester.OpenedURLs(); len(got) != 1 || got[0] != accessibilityURL {
+			t.Fatalf("permission URL = %q", got)
+		}
+	} else if tester.HasText("打开辅助功能设置") || !tester.HasText("已启用") {
+		t.Fatal("Windows must not request macOS Accessibility permission")
 	}
 	tester.Key(0, ui.KeyEscape)
 	tester.Frame()
@@ -174,7 +183,7 @@ func TestNumberShortcutsRespectFiltersAndInputs(t *testing.T) {
 	if len(app.jobs) != 1 {
 		t.Fatal("out-of-range number must be ignored")
 	}
-	tester.Key(ui.Cmd, ui.KeyF)
+	tester.Key(primaryModifier(), ui.KeyF)
 	tester.TypeKey(0, ui.Key1, "1")
 	if app.query != "1" || len(app.jobs) != 1 {
 		t.Fatalf("search must accept digits without paste: query=%q", app.query)
@@ -182,7 +191,7 @@ func TestNumberShortcutsRespectFiltersAndInputs(t *testing.T) {
 	app.openEntry(app.entries[0])
 	tester.Frame()
 	_ = tester.Click("编辑内容")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.TypeKey(0, ui.Key9, "9")
 	if app.editDraft != "9" || len(app.jobs) != 1 {
 		t.Fatal("editor must accept digits")
@@ -190,7 +199,7 @@ func TestNumberShortcutsRespectFiltersAndInputs(t *testing.T) {
 	app.openSettings()
 	tester.Frame()
 	_ = tester.Click("全局快捷键")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.TypeKey(0, ui.Key1, "1")
 	if app.shortcutDraft != "1" || len(app.jobs) != 1 {
 		t.Fatal("settings must accept digits")
@@ -210,7 +219,7 @@ func TestTranslationSettingsAndEditableResult(t *testing.T) {
 	app.finishTranslation(app.translationSequence, "one", "Keep the idea close.", nil)
 	tester.Frame()
 	_ = tester.Click("编辑内容")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.TypeKey(0, ui.Key1, "1")
 	tester.Type(" edited translation")
 	if app.editDraft != "1 edited translation" || app.entries[0].Text != "把灵感留在手边，随时接着写。" {
@@ -256,7 +265,7 @@ func TestTranslationSettingsAndEditableResult(t *testing.T) {
 	_ = tester.Click("翻译")
 	tester.Frame()
 	_ = tester.Click("开发者 Token")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.Type("unsaved")
 	_ = tester.Click("返回历史")
 	_ = tester.Click("设置")
@@ -277,14 +286,14 @@ func TestTranslationSettingsCanDisconnectAccount(t *testing.T) {
 	app.settingsTab = 1
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
 	_ = tester.Click("开发者 Token")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.Key(0, ui.KeyBackspace)
 	_ = tester.Click("保存翻译配置")
 	if app.settings.Translation.Token != "token" || !tester.HasText("填写腾讯交互翻译") {
 		t.Fatal("partial credentials must not replace a valid configuration")
 	}
 	_ = tester.Click("开发者 User")
-	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Key(primaryModifier(), ui.KeyA)
 	tester.Key(0, ui.KeyBackspace)
 	_ = tester.Click("保存翻译配置")
 	if app.settings.Translation.User != "" || app.settings.Translation.Token != "" {

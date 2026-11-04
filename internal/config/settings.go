@@ -11,10 +11,7 @@ import (
 	"vitals/internal/translation"
 )
 
-// DefaultShortcut opens the clipboard panel in a fresh configuration.
-const DefaultShortcut = "Command+Shift+V"
-
-// Settings holds user preferences; OpenAtLogin is read from macOS, not persisted.
+// Settings holds user preferences; OpenAtLogin is read from the OS, not persisted.
 type Settings struct {
 	Shortcut     string             `json:"shortcut"`
 	HistoryLimit int                `json:"historyLimit"`

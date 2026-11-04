@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"vitals/internal/clipboard"
-	"vitals/internal/platform/macos"
+	"vitals/internal/platform"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -210,13 +210,13 @@ func (a *application) pasteEntry(entry clipboard.Entry) {
 	}
 }
 
-func (a *application) awaitPaste(target macos.Target, seq uint64, deadline time.Time) {
+func (a *application) awaitPaste(target platform.Target, seq uint64, deadline time.Time) {
 	time.AfterFunc(45*time.Millisecond, func() {
 		a.win.Update(func() {
 			if a.quitting || seq != a.actionSequence {
 				return
 			}
-			if a.native.Frontmost().PID == target.PID && a.native.ModifiersReleased() {
+			if a.native.Frontmost().Matches(target) && a.native.ModifiersReleased() {
 				err := a.native.Paste(target)
 				a.pasting = false
 				if err != nil {
@@ -225,7 +225,7 @@ func (a *application) awaitPaste(target macos.Target, seq uint64, deadline time.
 				return
 			}
 			if time.Now().After(deadline) {
-				a.pasteFailed("未能恢复目标应用焦点，内容已复制，可使用 ⌘V 粘贴")
+				a.pasteFailed("未能恢复目标应用焦点，内容已复制，可使用 " + primaryShortcutLabel("V") + " 粘贴")
 				return
 			}
 			a.awaitPaste(target, seq, deadline)

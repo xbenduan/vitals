@@ -25,7 +25,7 @@ func (a *application) historyView(c *ui.Context) {
 				a.searchHandle.Focus()
 			}).Size(22, 22)
 		} else {
-			ui.Text(c, "⌘ F").FontSize(10).TextColor(muted)
+			ui.Text(c, primaryShortcutLabel("F")).FontSize(10).TextColor(muted)
 		}
 	})
 	ui.Row(c).Margin(0, 14, 8).Height(29).Shrink(0).Gap(5).AlignItems(ui.Center).Children(func() {
@@ -79,7 +79,7 @@ func (a *application) historyView(c *ui.Context) {
 			case a.tab == 3:
 				title, help = "把常用内容留在手边", "点击记录右侧的星标即可收藏"
 			case a.tab == 2:
-				title, help = "还没有文件记录", "复制一张图片，或在 Finder 中复制文件"
+				title, help = "还没有文件记录", "复制一张图片，或从文件夹中复制文件"
 			case a.settings.Paused:
 				title, help = "监听已暂停", "点击右上角「已暂停」恢复"
 			}

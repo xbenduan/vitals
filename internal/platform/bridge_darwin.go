@@ -1,7 +1,6 @@
 //go:build darwin
 
-// Package macos provides the native integration used by the clipboard app.
-package macos
+package platform
 
 import (
 	"errors"
@@ -10,12 +9,6 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
-
-// Target identifies the external application that should receive a paste.
-type Target struct {
-	PID  int
-	Name string
-}
 
 // Bridge provides clipboard observation, focus restoration, and paste events.
 // Call its methods on MyGo's main thread after AppKit is initialized.
@@ -109,7 +102,7 @@ func (b *Bridge) Paste(target Target) error {
 	if !b.trusted() {
 		return errors.New("请在系统设置中允许 Vitals 使用「辅助功能」，以便自动粘贴")
 	}
-	if b.Frontmost().PID != target.PID {
+	if !b.Frontmost().Matches(target) {
 		return errors.New("目标应用没有获得焦点，内容已复制，可使用 ⌘V 粘贴")
 	}
 	down, up := b.createKey(0, 9, true), b.createKey(0, 9, false)
