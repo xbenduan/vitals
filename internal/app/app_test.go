@@ -1,10 +1,12 @@
-package main
+package app
 
 import (
 	"bytes"
 	"image/png"
 	"path/filepath"
 	"testing"
+
+	"vitals/internal/clipboard"
 
 	"github.com/egoist/mygo"
 )
@@ -47,9 +49,9 @@ func TestWindowCloseAllowsApplicationQuit(t *testing.T) {
 func TestOpeningDetailsCancelsPendingPaste(t *testing.T) {
 	app := newApplication()
 	before := app.actionSequence
-	app.clickEntry(clipEntry{ID: "first", Kind: kindText, Text: "hello"}, 0)
+	app.clickEntry(clipboard.Entry{ID: "first", Kind: clipboard.KindText, Text: "hello"}, 0)
 	clickSequence := app.actionSequence
-	app.openEntry(clipEntry{ID: "first", Kind: kindText, Text: "hello"})
+	app.openEntry(clipboard.Entry{ID: "first", Kind: clipboard.KindText, Text: "hello"})
 	if before >= clickSequence || app.actionSequence <= clickSequence || app.detail == nil || app.editDraft != "hello" {
 		t.Fatal("double click must invalidate the first click and open the editor")
 	}

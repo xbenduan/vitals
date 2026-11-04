@@ -42,6 +42,37 @@
 
 历史损坏时保留原文件并停止写入。旧版系统监控工具的 `settings.json` 不参与新配置。
 
+## 代码结构
+
+采用 Go 常用的 `cmd` + `internal` 布局，测试放在被测代码所在的包中：
+
+```text
+cmd/vitals/
+  main.go                  # 程序入口
+internal/
+  app/                     # 应用编排、MyGo 界面与交互状态
+    run.go                 # 事件循环与开发环境初始化
+    app.go                 # 应用生命周期与串行存储任务
+    window.go              # 状态栏面板显示、隐藏及定位
+    clipboard.go           # 监听、编辑、自动粘贴
+    images.go              # 图片加载、缩略图与预览
+    settings.go            # 设置动作与持久化调度
+    shortcut.go            # 快捷键解析、录制与注册
+    view*.go               # 主框架、历史、详情和设置页面
+    theme.go               # 主题、图标与共享界面控件
+  clipboard/               # 内容模型、历史存储、去重和搜索
+  config/                  # 配置默认值、读取与保存
+  atomicfile/              # 原子文件写入
+  platform/macos/          # macOS 权限、剪贴板版本、焦点和按键事件
+resources/                 # 应用图标等构建资源
+mygo.json                  # MyGo 开发与打包配置
+```
+
+依赖方向为 `cmd/vitals → app → clipboard / config / platform/macos`，
+`clipboard` 与 `config` 共用 `atomicfile`。存储和配置包不依赖 MyGo；
+界面状态集中在 `app` 的主线程，存储由单独的串行 worker 管理，
+通过 `Window.Update` 回传只读快照。页面按文件拆分，复用同一份私有应用状态。
+
 ## 开发与构建
 
 需要 macOS 13+、Go 1.27.1 或更高版本。
@@ -51,6 +82,12 @@ go tool mygo dev
 ```
 
 应用默认只显示状态栏图标。直接运行程序时可传入 `--show` 展开面板。
+
+```bash
+go run ./cmd/vitals --show
+```
+
+`mygo.json` 的 `main` 指向 `./cmd/vitals`，开发和打包命令仍从仓库根目录执行。
 
 ```bash
 CGO_ENABLED=0 go test ./...

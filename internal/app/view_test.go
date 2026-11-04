@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"image/png"
@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"vitals/internal/clipboard"
+	"vitals/internal/platform/macos"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -14,15 +17,15 @@ func previewApplication() *application {
 	app := newApplication()
 	app.loading = false
 	at := time.Date(2026, 11, 4, 14, 23, 8, 0, time.Local)
-	app.entries = []clipEntry{
-		{ID: "one", Kind: kindText, Text: "把灵感留在手边，随时接着写。", Source: "备忘录", CopiedAt: at},
-		{ID: "two", Kind: kindText, Text: "Command + Shift + V，找回刚刚复制的内容", Source: "TRAE CN", CopiedAt: at.Add(-time.Minute), Favorite: true},
-		{ID: "three", Kind: kindFiles, Files: []string{"/Users/example/Documents/项目计划.pdf"}, Source: "Finder", CopiedAt: at.Add(-3 * time.Minute)},
-		{ID: "four", Kind: kindText, Text: "https://go.dev/doc/", Source: "Safari", CopiedAt: at.Add(-5 * time.Minute)},
-		{ID: "five", Kind: kindText, Text: "周五 15:00 · 产品方案讨论\n记得带上新的界面草稿。", Source: "飞书", CopiedAt: at.Add(-8 * time.Minute), Favorite: true},
-		{ID: "six", Kind: kindText, Text: "func main() { fmt.Println(\"Hello, clipboard\") }", Source: "TRAE CN", CopiedAt: at.Add(-11 * time.Minute)},
+	app.entries = []clipboard.Entry{
+		{ID: "one", Kind: clipboard.KindText, Text: "把灵感留在手边，随时接着写。", Source: "备忘录", CopiedAt: at},
+		{ID: "two", Kind: clipboard.KindText, Text: "Command + Shift + V，找回刚刚复制的内容", Source: "TRAE CN", CopiedAt: at.Add(-time.Minute), Favorite: true},
+		{ID: "three", Kind: clipboard.KindFiles, Files: []string{"/Users/example/Documents/项目计划.pdf"}, Source: "Finder", CopiedAt: at.Add(-3 * time.Minute)},
+		{ID: "four", Kind: clipboard.KindText, Text: "https://go.dev/doc/", Source: "Safari", CopiedAt: at.Add(-5 * time.Minute)},
+		{ID: "five", Kind: clipboard.KindText, Text: "周五 15:00 · 产品方案讨论\n记得带上新的界面草稿。", Source: "飞书", CopiedAt: at.Add(-8 * time.Minute), Favorite: true},
+		{ID: "six", Kind: clipboard.KindText, Text: "func main() { fmt.Println(\"Hello, clipboard\") }", Source: "TRAE CN", CopiedAt: at.Add(-11 * time.Minute)},
 	}
-	app.target = pasteTarget{PID: 1234, Name: "备忘录"}
+	app.target = macos.Target{PID: 1234, Name: "备忘录"}
 	return app
 }
 

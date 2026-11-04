@@ -1,11 +1,11 @@
-package main
+package app
 
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -83,8 +83,6 @@ func shortcutLabel(value string) string {
 	).Replace(value)
 }
 
-func lowerExtension(path string) string { return strings.ToLower(filepath.Ext(path)) }
-
 func (a *application) recordShortcut(c *ui.Context) {
 	c.OnShortcut(0, ui.KeyEscape, func() { a.setRecording(false) })
 	for mods := ui.Modifiers(0); mods < 16; mods++ {
@@ -99,6 +97,51 @@ func (a *application) recordShortcut(c *ui.Context) {
 				a.setRecording(false)
 				a.message = "点击「保存快捷键」使新组合生效"
 			})
+		}
+	}
+}
+
+func (a *application) applyShortcut() {
+	if a.native == nil {
+		return
+	}
+	shortcut, err := normalizeShortcut(a.shortcutDraft)
+	if err != nil {
+		a.message = err.Error()
+		return
+	}
+	if shortcut == a.shortcutActive {
+		a.setRecording(false)
+		return
+	}
+	// Register the new binding before releasing the old one. A conflict leaves
+	// the working shortcut intact.
+	if err := mygo.GlobalShortcut.Register(shortcut, a.toggleWindow); err != nil {
+		a.message = "此快捷键无法注册，请换一个组合"
+		return
+	}
+	if a.shortcutActive != "" {
+		mygo.GlobalShortcut.Unregister(a.shortcutActive)
+	}
+	a.shortcutActive, a.settings.Shortcut, a.shortcutDraft = shortcut, shortcut, shortcut
+	a.recording = false
+	a.message = "快捷键已更新"
+	a.persistSettings()
+}
+
+func (a *application) setRecording(recording bool) {
+	a.recording = recording
+	if a.native == nil || a.shortcutActive == "" {
+		return
+	}
+	if recording && !a.shortcutSuspended {
+		mygo.GlobalShortcut.Unregister(a.shortcutActive)
+		a.shortcutSuspended = true
+	} else if !recording && a.shortcutSuspended {
+		a.shortcutSuspended = false
+		if err := mygo.GlobalShortcut.Register(a.shortcutActive, a.toggleWindow); err != nil {
+			a.message = "原快捷键无法恢复，请重新设置"
+			a.shortcutActive = ""
 		}
 	}
 }

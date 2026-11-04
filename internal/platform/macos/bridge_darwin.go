@@ -1,6 +1,7 @@
 //go:build darwin
 
-package main
+// Package macos provides the native integration used by the clipboard app.
+package macos
 
 import (
 	"errors"
@@ -11,13 +12,16 @@ import (
 	"github.com/ebitengine/purego/objc"
 )
 
-type pasteTarget struct {
+// Target identifies the external application that should receive a paste.
+type Target struct {
 	PID  int
 	Name string
 }
 
-// Native calls run on MyGo's main thread. No Objective-C object escapes a call.
-type nativeBridge struct {
+// Bridge provides clipboard observation, focus restoration, and paste events.
+// Call its methods on MyGo's main thread after AppKit is initialized.
+// No Objective-C object escapes a call.
+type Bridge struct {
 	trusted   func() bool
 	createKey func(uintptr, uint16, bool) uintptr
 	setFlags  func(uintptr, uint64)
@@ -26,7 +30,8 @@ type nativeBridge struct {
 	keyState  func(int32, uint16) bool
 }
 
-func newNativeBridge() (*nativeBridge, error) {
+// NewBridge loads macOS frameworks and binds the native functions.
+func NewBridge() (*Bridge, error) {
 	cg, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
 		return nil, err
@@ -39,7 +44,7 @@ func newNativeBridge() (*nativeBridge, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &nativeBridge{}
+	b := &Bridge{}
 	purego.RegisterLibFunc(&b.trusted, ax, "AXIsProcessTrusted")
 	purego.RegisterLibFunc(&b.createKey, cg, "CGEventCreateKeyboardEvent")
 	purego.RegisterLibFunc(&b.setFlags, cg, "CGEventSetFlags")
@@ -56,27 +61,36 @@ func nativeString(value objc.ID) string {
 	return objc.Send[string](value, objc.RegisterName("UTF8String"))
 }
 
-func (b *nativeBridge) frontmost() pasteTarget {
+// Trusted reports whether the app has Accessibility permission.
+func (b *Bridge) Trusted() bool {
+	return b.trusted()
+}
+
+// Frontmost returns the active external app, or a zero target for this process.
+func (b *Bridge) Frontmost() Target {
 	workspace := objc.ID(objc.GetClass("NSWorkspace")).Send(objc.RegisterName("sharedWorkspace"))
 	app := workspace.Send(objc.RegisterName("frontmostApplication"))
 	pid := int(app.Send(objc.RegisterName("processIdentifier")))
 	if pid == 0 || pid == os.Getpid() {
-		return pasteTarget{}
+		return Target{}
 	}
-	return pasteTarget{PID: pid, Name: nativeString(app.Send(objc.RegisterName("localizedName")))}
+	return Target{PID: pid, Name: nativeString(app.Send(objc.RegisterName("localizedName")))}
 }
 
-func (b *nativeBridge) changeCount() int {
+// ChangeCount returns the system pasteboard revision used to detect new copies.
+func (b *Bridge) ChangeCount() int {
 	board := objc.ID(objc.GetClass("NSPasteboard")).Send(objc.RegisterName("generalPasteboard"))
 	return int(board.Send(objc.RegisterName("changeCount")))
 }
 
-func (b *nativeBridge) doubleClickDelay() time.Duration {
+// DoubleClickDelay returns the system double-click interval plus a 30 ms grace period.
+func (b *Bridge) DoubleClickDelay() time.Duration {
 	seconds := objc.Send[float64](objc.ID(objc.GetClass("NSEvent")), objc.RegisterName("doubleClickInterval"))
 	return time.Duration(seconds*float64(time.Second)) + 30*time.Millisecond
 }
 
-func (b *nativeBridge) activate(target pasteTarget) bool {
+// Activate asks macOS to bring the target forward; focus may settle asynchronously.
+func (b *Bridge) Activate(target Target) bool {
 	if target.PID <= 0 || target.PID == os.Getpid() {
 		return false
 	}
@@ -84,7 +98,8 @@ func (b *nativeBridge) activate(target pasteTarget) bool {
 	return app != 0 && objc.Send[bool](app, objc.RegisterName("activateWithOptions:"), uint64(2))
 }
 
-func (b *nativeBridge) modifiersReleased() bool {
+// ModifiersReleased reports whether Command, Shift, Option, and Control are all up.
+func (b *Bridge) ModifiersReleased() bool {
 	// Wait for both sides of Command, Shift, Option and Control, so opening
 	// via a held shortcut cannot turn the synthetic Cmd+V into Cmd+Shift+V.
 	for _, key := range []uint16{54, 55, 56, 60, 58, 61, 59, 62} {
@@ -95,11 +110,13 @@ func (b *nativeBridge) modifiersReleased() bool {
 	return true
 }
 
-func (b *nativeBridge) paste(target pasteTarget) error {
+// Paste sends Command+V to the target after checking permission and current focus.
+// Success means the events were sent, not that the target accepted the content.
+func (b *Bridge) Paste(target Target) error {
 	if !b.trusted() {
 		return errors.New("请在系统设置中允许 Vitals 使用「辅助功能」，以便自动粘贴")
 	}
-	if b.frontmost().PID != target.PID {
+	if b.Frontmost().PID != target.PID {
 		return errors.New("目标应用没有获得焦点，内容已复制，可使用 ⌘V 粘贴")
 	}
 	down, up := b.createKey(0, 9, true), b.createKey(0, 9, false)
