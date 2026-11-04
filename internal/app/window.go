@@ -11,6 +11,8 @@ func (a *application) handleWindowClose(event *mygo.CloseEvent) {
 
 func (a *application) hideWindow() {
 	a.cancelPending()
+	a.cancelTranslation()
+	a.cancelModelDetection()
 	a.setRecording(false)
 	if a.win != nil {
 		a.win.Hide()
@@ -42,7 +44,7 @@ func (a *application) showWindow() {
 		a.win.Center()
 	}
 	if a.detail == nil && !a.settingsOpen {
-		a.searchHandle.Focus()
+		a.historyHandle.Focus()
 	}
 	a.win.Show()
 	a.win.Focus()

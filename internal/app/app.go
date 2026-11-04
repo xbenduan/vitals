@@ -1,16 +1,17 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"slices"
-	"time"
 
 	"vitals/internal/clipboard"
 	"vitals/internal/config"
 	"vitals/internal/platform/macos"
+	"vitals/internal/translation"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -33,6 +34,7 @@ type application struct {
 	settings          config.Settings
 	settingsPath      string
 	settingsOpen      bool
+	settingsTab       int
 	shortcutDraft     string
 	shortcutActive    string
 	shortcutSuspended bool
@@ -48,6 +50,7 @@ type application struct {
 	selected      int
 	list          ui.ListState
 	searchHandle  ui.Handle
+	historyHandle ui.Handle
 	editorHandle  ui.Handle
 	detail        *clipboard.Entry
 	editDraft     string
@@ -55,6 +58,19 @@ type application struct {
 	message       string
 	confirmClear  bool
 	confirmDelete bool
+	deleteID      string
+
+	translationDraft    translation.Config
+	translationMode     bool
+	translating         bool
+	translationError    string
+	translationCancel   context.CancelFunc
+	translationSequence uint64
+	models              []string
+	detectingModels     bool
+	modelStatus         string
+	modelCancel         context.CancelFunc
+	modelSequence       uint64
 
 	images         map[string]*ui.Bitmap
 	imageRequested map[string]bool
@@ -67,25 +83,23 @@ type application struct {
 	workerDone     chan struct{}
 	lastChange     int
 	target         macos.Target
-	clickDelay     time.Duration
-	clickTimer     *time.Timer
 	actionSequence uint64
 	pasting        bool
 }
 
 func newApplication() *application {
 	return &application{
-		settings:       config.Default(),
-		shortcutDraft:  config.DefaultShortcut,
-		limitChoice:    "500",
-		loading:        true,
-		images:         make(map[string]*ui.Bitmap),
-		imageRequested: make(map[string]bool),
-		imageErrors:    make(map[string]string),
-		jobs:           make(chan func(*clipboard.Store), 32),
-		done:           make(chan struct{}),
-		workerDone:     make(chan struct{}),
-		clickDelay:     530 * time.Millisecond,
+		settings:         config.Default(),
+		shortcutDraft:    config.DefaultShortcut,
+		limitChoice:      "500",
+		loading:          true,
+		images:           make(map[string]*ui.Bitmap),
+		imageRequested:   make(map[string]bool),
+		imageErrors:      make(map[string]string),
+		jobs:             make(chan func(*clipboard.Store), 32),
+		done:             make(chan struct{}),
+		workerDone:       make(chan struct{}),
+		translationDraft: translation.Default(),
 	}
 }
 
@@ -104,22 +118,22 @@ func (a *application) ready() {
 	a.shortcutDraft = a.settings.Shortcut
 	a.limitChoice = fmt.Sprint(a.settings.HistoryLimit)
 	a.settings.OpenAtLogin = mygo.App.OpenAtLogin()
+	a.translationDraft = a.settings.Translation
 	a.native, err = macos.NewBridge()
 	if err != nil {
 		log.Fatal("macOS integration: ", err)
 	}
 	a.trusted = a.native.Trusted()
-	a.clickDelay = max(a.native.DoubleClickDelay(), 530*time.Millisecond)
 	a.target = a.native.Frontmost()
 	a.lastChange = a.native.ChangeCount()
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon: menuBarIcon(), IconIsTemplate: true, ToolTip: "Vitals · 剪贴板",
+		Icon: menuBarIcon(), IconIsTemplate: true, ToolTip: "Clipboard",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: "Vitals · 剪贴板", Width: panelWidth, Height: panelHeight,
+		Title: "Clipboard", Width: panelWidth, Height: panelHeight,
 		Hidden: true, Frameless: true, Transparent: true,
 		DisableResize: true, DisableMove: true, DisableMinimize: true,
 		DisableMaximize: true, DisableFullScreen: true, AlwaysOnTop: true,
@@ -141,6 +155,9 @@ func (a *application) ready() {
 	}
 	go a.diskLoop(filepath.Join(dir, "Clipboard"))
 	go a.monitorLoop()
+	if a.settings.Translation.Provider == translation.Ollama && a.settings.Translation.Model == "" {
+		a.detectModels(true)
+	}
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.shutdown() })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		mygo.GlobalShortcut.UnregisterAll()
@@ -238,6 +255,8 @@ func (a *application) shutdown() {
 	}
 	a.quitting = true
 	a.cancelPending()
+	a.cancelTranslation()
+	a.cancelModelDetection()
 	close(a.done)
 	close(a.jobs)
 	// Jobs only post asynchronous UI updates, so the main thread can safely

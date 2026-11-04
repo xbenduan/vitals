@@ -12,26 +12,40 @@ import (
 
 func (a *application) detailView(c *ui.Context) {
 	entry := *a.detail
-	ui.Row(c).Padding(0, 14, 10).Gap(5).AlignItems(ui.Center).Children(func() {
-		iconButton(c, "返回历史", iconBack, a.back)
-		title := "编辑文字"
-		if entry.Kind != clipboard.KindText {
-			title = "预览内容"
-		}
-		ui.Text(c, title).FontSize(13).FontWeight(600).Grow(1)
-		iconButton(c, "删除记录", iconTrash, func() { a.confirmDelete = true })
-	})
 	if entry.Kind == clipboard.KindText {
 		c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.saveEdit(false) })
 		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() { a.saveEdit(true) })
+		if a.translationMode {
+			ui.Column(c).Margin(0, 16, 10).Padding(10).Radius(8).Background(lavender).Gap(5).Children(func() {
+				ui.Text(c, "原文").FontSize(10).TextColor(muted)
+				ui.Text(c, entry.Title()).FontSize(11).MaxLines(2)
+				switch {
+				case a.translating:
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Spinner(c).Size(14, 14)
+						ui.Text(c, "正在翻译，首次加载模型可能稍慢…").FontSize(11).TextColor(accent).Grow(1)
+						ui.Button(c, "停止").OnClick(a.cancelTranslation)
+					})
+				case a.translationError != "":
+					ui.Text(c, a.translationError).FontSize(11).TextColor(c.Theme().Danger).MaxLines(3)
+					ui.Row(c).Gap(7).Children(func() {
+						ui.Button(c, "重试").OnClick(func() { a.translateEntry(entry) })
+						ui.Button(c, "翻译设置").OnClick(func() { a.openSettings(); a.settingsTab = 1 })
+					})
+				default:
+					ui.Text(c, "译文可继续编辑，保存后加入历史记录").FontSize(10).TextColor(accent)
+				}
+			})
+		}
+		blocked := a.saving || a.translating || a.translationError != ""
 		ui.TextArea(c.Key("editor"), &a.editDraft).Bind(&a.editorHandle).Grow(1).MinHeight(0).
 			Margin(0, 16, 10).Padding(12).FontSize(13).Background(ui.Hex("#FFFFFF")).
-			Label("编辑内容").Disabled(a.saving)
+			Label("编辑内容").Disabled(blocked)
 		ui.Row(c).Padding(0, 16, 14).AlignItems(ui.Center).Gap(7).Children(func() {
 			ui.Text(c, fmt.Sprintf("%d 字符", len([]rune(a.editDraft)))).FontSize(10).TextColor(muted).Grow(1)
 			ui.Button(c, "取消").Disabled(a.saving).OnClick(a.back)
-			ui.Button(c, "保存").Disabled(a.saving || a.editDraft == "").OnClick(func() { a.saveEdit(false) })
-			ui.PrimaryButton(c, "保存并粘贴").Disabled(a.saving || a.editDraft == "").OnClick(func() { a.saveEdit(true) })
+			ui.Button(c, "保存").Disabled(blocked || a.editDraft == "").OnClick(func() { a.saveEdit(false) })
+			ui.PrimaryButton(c, "保存并粘贴").Disabled(blocked || a.editDraft == "").OnClick(func() { a.saveEdit(true) })
 		})
 		return
 	}

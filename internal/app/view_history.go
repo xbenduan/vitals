@@ -47,6 +47,7 @@ func (a *application) historyView(c *ui.Context) {
 				a.tab = tab
 				a.selected = 0
 				a.list.ScrollTo(0, ui.Start)
+				a.historyHandle.Focus()
 			})
 		}
 	})
@@ -88,6 +89,7 @@ func (a *application) historyView(c *ui.Context) {
 		return
 	}
 	ui.List(c.Key("history"), &a.list, len(items)).
+		Bind(&a.historyHandle).Focusable().
 		Grow(1).MinHeight(0).Padding(0, 10, 10).Gap(4).
 		ItemKey(func(i int) any { return items[i].ID }).
 		Rows(func(row ui.ListRow) { a.entryRow(row.Context, items[row.Index], row.Index) })
@@ -95,7 +97,6 @@ func (a *application) historyView(c *ui.Context) {
 
 func (a *application) entryRow(c *ui.Context, entry clipboard.Entry, index int) {
 	active := index == a.selected
-	double := false
 	row := ui.Row(c).Height(62).Radius(10).Border(1, ui.Transparent).AlignItems(ui.Center).Padding(0, 9, 0, 0)
 	if active {
 		row.Background(lavender).BorderColor(selectedLine)
@@ -117,8 +118,13 @@ func (a *application) entryRow(c *ui.Context, entry clipboard.Entry, index int) 
 				ui.Text(c, source+" · "+entry.CopiedAt.Local().Format("2006-01-02 15:04:05")).
 					FontSize(10).TextColor(muted).SingleLine()
 			})
+			if index < 9 {
+				ui.Box(c).Size(18, 20).Shrink(0).Radius(5).Background(ui.Hex("#FFFFFF").Alpha(.7)).
+					Center().Children(func() {
+					ui.Text(c, fmt.Sprint(index+1)).FontSize(10).TextColor(muted)
+				})
+			}
 		})
-		double = button.DoubleClicked()
 		button.OnClick(func() { a.clickEntry(entry, index) })
 		star, label := iconStar, "收藏 "
 		if entry.Favorite {
@@ -133,11 +139,24 @@ func (a *application) entryRow(c *ui.Context, entry clipboard.Entry, index int) 
 		}
 		control.Tooltip(strings.TrimSpace(label))
 	})
-	// MyGo reports the second press before the release that produces Clicked.
-	// Handle it in this build so the first click's pending paste is cancelled.
-	if double {
-		a.openEntry(entry)
-	}
+	row.ContextMenu(func(m *ui.Menu) {
+		label := "编辑"
+		if entry.Kind != clipboard.KindText {
+			label = "预览"
+		}
+		if m.Item(label).Chosen() {
+			a.openEntry(entry)
+		}
+		if entry.Kind == clipboard.KindText && m.Item("翻译").Chosen() {
+			a.translateEntry(entry)
+		}
+		m.Separator()
+		if m.Item("删除").Chosen() {
+			a.cancelPending()
+			a.deleteID = entry.ID
+			a.confirmDelete = true
+		}
+	})
 }
 
 func (a *application) entryIcon(c *ui.Context, entry clipboard.Entry) {
@@ -162,6 +181,14 @@ func (a *application) moveSelection(delta int) {
 	items := clipboard.Filter(a.entries, a.tab, a.query)
 	a.selected = max(0, min(a.selected+delta, len(items)-1))
 	a.list.ScrollIntoView(a.selected)
+	a.historyHandle.Focus()
+}
+
+func (a *application) pasteNumber(index int) {
+	items := clipboard.Filter(a.entries, a.tab, a.query)
+	if index >= 0 && index < len(items) {
+		a.clickEntry(items[index], index)
+	}
 }
 
 func (a *application) selectedEntry() (clipboard.Entry, bool) {

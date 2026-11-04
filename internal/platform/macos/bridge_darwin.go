@@ -6,7 +6,6 @@ package macos
 import (
 	"errors"
 	"os"
-	"time"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
@@ -81,12 +80,6 @@ func (b *Bridge) Frontmost() Target {
 func (b *Bridge) ChangeCount() int {
 	board := objc.ID(objc.GetClass("NSPasteboard")).Send(objc.RegisterName("generalPasteboard"))
 	return int(board.Send(objc.RegisterName("changeCount")))
-}
-
-// DoubleClickDelay returns the system double-click interval plus a 30 ms grace period.
-func (b *Bridge) DoubleClickDelay() time.Duration {
-	seconds := objc.Send[float64](objc.ID(objc.GetClass("NSEvent")), objc.RegisterName("doubleClickInterval"))
-	return time.Duration(seconds*float64(time.Second)) + 30*time.Millisecond
 }
 
 // Activate asks macOS to bring the target forward; focus may settle asynchronously.

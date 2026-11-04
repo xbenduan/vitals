@@ -16,13 +16,18 @@ func (a *application) view(c *ui.Context) {
 		c.OnShortcut(0, ui.KeyEscape, a.back)
 		c.OnShortcut(ui.Cmd, ui.KeyW, a.hideWindow)
 		c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
-		if !a.settingsOpen && a.detail == nil {
+		if !a.settingsOpen && a.detail == nil && !a.confirmDelete && !a.confirmClear {
 			c.OnShortcut(ui.Cmd, ui.KeyF, func() { a.cancelPending(); a.searchHandle.Focus() })
 			c.OnShortcut(0, ui.KeyDown, func() { a.moveSelection(1) })
 			c.OnShortcut(0, ui.KeyUp, func() { a.moveSelection(-1) })
 			c.OnShortcut(0, ui.KeyEnter, a.pasteSelected)
 			c.OnShortcut(ui.Cmd, ui.KeyE, a.editSelected)
 			c.OnShortcut(ui.Cmd, ui.KeyD, a.favoriteSelected)
+			if !a.searchHandle.Focused(c) {
+				for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
+					c.OnShortcut(0, key, func() { a.pasteNumber(i) })
+				}
+			}
 		}
 	}
 	ui.Column(c).Fill().Margin(1).Radius(13).Clip().Background(paper).Border(1, hairline).Children(func() {
@@ -43,19 +48,38 @@ func (a *application) view(c *ui.Context) {
 	if ui.AlertDialog(c, &a.confirmClear, "清空历史记录？", "将删除未收藏的记录及保存的图片，收藏内容会保留。", "取消", "清空历史") == 1 {
 		a.mutate(func(s *clipboard.Store) error { return s.Clear() }, func() { a.selected = 0 })
 	}
-	if ui.AlertDialog(c, &a.confirmDelete, "删除这条记录？", "只删除剪贴板历史，不会删除原始文件。", "取消", "删除记录") == 1 && a.detail != nil {
-		id := a.detail.ID
-		a.mutate(func(s *clipboard.Store) error { return s.Remove(id) }, func() { a.detail = nil })
+	if ui.AlertDialog(c, &a.confirmDelete, "删除这条记录？", "只删除剪贴板历史，不会删除原始文件。", "取消", "删除记录") == 1 && a.deleteID != "" {
+		id := a.deleteID
+		a.deleteID = ""
+		a.mutate(func(s *clipboard.Store) error { return s.Remove(id) }, func() { a.historyHandle.Focus() })
 	}
 }
 
 func (a *application) header(c *ui.Context) {
 	ui.Row(c).Height(53).Shrink(0).Padding(0, 16).Gap(9).AlignItems(ui.Center).Children(func() {
+		if a.settingsOpen || a.detail != nil {
+			iconButton(c, "返回历史", iconBack, a.back).Disabled(a.saving)
+			title := "设置"
+			if !a.settingsOpen {
+				switch {
+				case a.translationMode:
+					title = "翻译结果"
+				case a.detail.Kind == clipboard.KindText:
+					title = "编辑文字"
+				default:
+					title = "预览内容"
+				}
+			}
+			ui.Text(c, title).FontSize(15).FontWeight(650).Grow(1)
+			if a.translationMode && !a.settingsOpen {
+				ui.Text(c, "原文保留").FontSize(10).TextColor(muted)
+			}
+			return
+		}
 		ui.Box(c).Size(29, 29).Radius(9).Background(lavender).Center().Children(func() {
 			ui.Icon(c, iconClipboard).Size(20, 20).TextColor(accent)
 		})
-		ui.Text(c, "Vitals").FontSize(16).FontWeight(650)
-		ui.Text(c, "剪贴板").FontSize(11).TextColor(muted).Grow(1)
+		ui.Text(c, "Clipboard").FontSize(16).FontWeight(650).Grow(1)
 		label, icon, tint := "正在监听", iconListen, ui.Hex("#6F9B85")
 		if a.settings.Paused {
 			label, icon, tint = "已暂停", iconPause, muted
@@ -70,12 +94,7 @@ func (a *application) header(c *ui.Context) {
 				ui.Icon(c, icon).Size(14, 14)
 				ui.Text(c, label).FontSize(11)
 			}).OnClick(a.toggleListening)
-		iconButton(c, "设置", iconSettings, func() {
-			a.cancelPending()
-			a.settingsOpen = !a.settingsOpen
-			a.setRecording(false)
-			a.message = ""
-		})
+		iconButton(c, "设置", iconSettings, a.openSettings)
 	})
 }
 
@@ -91,7 +110,7 @@ func (a *application) footer(c *ui.Context) {
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		if a.settingsOpen {
 			ui.Text(c, "Esc 返回").FontSize(10).TextColor(muted).Grow(1)
-			ui.Text(c, "Vitals · 本地剪贴板").FontSize(10).TextColor(muted)
+			ui.Text(c, "Clipboard").FontSize(10).TextColor(muted)
 		} else if a.detail != nil {
 			ui.Text(c, "Esc 返回").FontSize(10).TextColor(muted).Grow(1)
 			if a.detail.Kind == clipboard.KindText {
@@ -100,7 +119,8 @@ func (a *application) footer(c *ui.Context) {
 		} else {
 			ui.Text(c, "↑ ↓ 选择").FontSize(10).TextColor(muted)
 			ui.Text(c, "↵ 粘贴").FontSize(10).TextColor(muted)
-			ui.Text(c, "双击编辑 / 预览").FontSize(10).TextColor(muted).Grow(1)
+			ui.Text(c, "1–9 快捷粘贴").FontSize(10).TextColor(muted)
+			ui.Text(c, "右键操作").FontSize(10).TextColor(muted).Grow(1)
 			if a.target.Name != "" {
 				ui.Text(c, "粘贴至 "+a.target.Name).FontSize(10).TextColor(accent).MaxWidth(140).SingleLine()
 			} else {
@@ -116,9 +136,13 @@ func (a *application) back() {
 	case a.saving:
 		return
 	case a.settingsOpen:
+		a.cancelModelDetection()
 		a.settingsOpen = false
 		a.setRecording(false)
 	case a.detail != nil:
+		a.cancelTranslation()
+		a.translationMode = false
+		a.translationError = ""
 		a.detail = nil
 		a.previewID, a.previewImage, a.previewError = "", nil, ""
 	default:
@@ -126,5 +150,5 @@ func (a *application) back() {
 		return
 	}
 	a.message = ""
-	a.searchHandle.Focus()
+	a.historyHandle.Focus()
 }

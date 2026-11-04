@@ -4,12 +4,15 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"vitals/internal/clipboard"
 	"vitals/internal/platform/macos"
+	"vitals/internal/translation"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -32,7 +35,7 @@ func previewApplication() *application {
 func TestCompactPanelSearchAndTabs(t *testing.T) {
 	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
-	for _, text := range []string{"Vitals", "正在监听", "全部", "文字", "文件", "收藏", "2026-11-04 14:23:08"} {
+	for _, text := range []string{"Clipboard", "正在监听", "全部", "文字", "文件", "收藏", "2026-11-04 14:23:08"} {
 		if !tester.HasText(text) {
 			t.Fatalf("missing %q: %q", text, tester.Texts())
 		}
@@ -83,23 +86,53 @@ func TestEditorSurvivesRebuildAndCancel(t *testing.T) {
 	}
 }
 
-func TestDoubleClickOpensEditorBeforeSecondRelease(t *testing.T) {
+func TestClickPastesImmediatelyAndRightClickEdits(t *testing.T) {
 	app := previewApplication()
+	// A non-nil window allows dispatch without running native clipboard work.
+	app.win = &mygo.Window{}
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
 	if err := tester.Click("记录 one"); err != nil {
 		t.Fatal(err)
 	}
-	sequence := app.actionSequence
+	if len(app.jobs) != 1 || !app.pasting {
+		t.Fatal("single click must dispatch paste without a timer")
+	}
 	if err := tester.Click("记录 one"); err != nil {
 		t.Fatal(err)
 	}
-	if app.detail == nil || app.detail.ID != "one" || app.actionSequence <= sequence {
-		t.Fatalf("double click did not open editor and cancel paste: detail=%+v", app.detail)
+	if app.detail != nil {
+		t.Fatal("a second click must not open the editor")
+	}
+	jobs := len(app.jobs)
+	if err := tester.RightClick("记录 one"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tester.Menu(), []string{"编辑", "翻译", "-", "删除"}) || len(app.jobs) != jobs {
+		t.Fatalf("text menu = %v; right click must not paste", tester.Menu())
+	}
+	if err := tester.ChooseMenuItem("编辑"); err != nil {
+		t.Fatal(err)
 	}
 	tester.Frame()
 	tester.Frame()
-	if !tester.HasText("编辑文字") {
-		t.Fatal("editor disappeared after double click")
+	if app.detail == nil || app.detail.ID != "one" || !tester.HasText("编辑文字") || tester.HasText("删除记录") || tester.HasText("Clipboard") {
+		t.Fatal("context menu must open the editor with a secondary-page header")
+	}
+	_ = tester.Click("返回历史")
+	if err := tester.RightClick("记录 three"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tester.Menu(), []string{"预览", "-", "删除"}) {
+		t.Fatalf("file menu = %v", tester.Menu())
+	}
+	_ = tester.ChooseMenuItem("删除")
+	if !app.confirmDelete || app.deleteID != "three" || app.detail != nil {
+		t.Fatal("delete must capture the context entry independently of the editor")
+	}
+	app.selected = 0
+	tester.Frame()
+	if app.deleteID != "three" {
+		t.Fatal("selection must not change the pending deletion target")
 	}
 }
 
@@ -107,7 +140,7 @@ func TestSettingsAndShortcutRecording(t *testing.T) {
 	app := previewApplication()
 	tester := ui.NewTester(app.view, panelWidth, panelHeight)
 	_ = tester.Click("设置")
-	for _, text := range []string{"打开剪贴板", "自动粘贴", "保留历史", "登录时启动", "退出 Vitals"} {
+	for _, text := range []string{"打开剪贴板", "自动粘贴", "保留历史", "登录时启动", "退出应用"} {
 		if !tester.HasText(text) {
 			t.Fatalf("missing settings control %q", text)
 		}
@@ -125,6 +158,89 @@ func TestSettingsAndShortcutRecording(t *testing.T) {
 	tester.Frame()
 	if app.settingsOpen || !tester.HasText("最近复制") {
 		t.Fatal("settings must return to clipboard")
+	}
+}
+
+func TestNumberShortcutsRespectFiltersAndInputs(t *testing.T) {
+	app := previewApplication()
+	app.win = &mygo.Window{}
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	_ = tester.Click("收藏")
+	tester.TypeKey(0, ui.Key2, "2")
+	if entry, ok := app.selectedEntry(); !ok || entry.ID != "five" || len(app.jobs) != 1 {
+		t.Fatalf("2 must paste the second filtered entry: %+v, jobs=%d", entry, len(app.jobs))
+	}
+	tester.Key(0, ui.Key9)
+	if len(app.jobs) != 1 {
+		t.Fatal("out-of-range number must be ignored")
+	}
+	tester.Key(ui.Cmd, ui.KeyF)
+	tester.TypeKey(0, ui.Key1, "1")
+	if app.query != "1" || len(app.jobs) != 1 {
+		t.Fatalf("search must accept digits without paste: query=%q", app.query)
+	}
+	app.openEntry(app.entries[0])
+	tester.Frame()
+	_ = tester.Click("编辑内容")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.TypeKey(0, ui.Key9, "9")
+	if app.editDraft != "9" || len(app.jobs) != 1 {
+		t.Fatal("editor must accept digits")
+	}
+	app.openSettings()
+	tester.Frame()
+	_ = tester.Click("全局快捷键")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.TypeKey(0, ui.Key1, "1")
+	if app.shortcutDraft != "1" || len(app.jobs) != 1 {
+		t.Fatal("settings must accept digits")
+	}
+}
+
+func TestTranslationSettingsAndEditableResult(t *testing.T) {
+	app := previewApplication()
+	tester := ui.NewTester(app.view, panelWidth, panelHeight)
+	_ = tester.RightClick("记录 one")
+	if err := tester.ChooseMenuItem("翻译"); err != nil {
+		t.Fatal(err)
+	}
+	if !app.translationMode || !tester.HasText("翻译结果") {
+		t.Fatal("translate must reuse the editor")
+	}
+	app.finishTranslation(app.translationSequence, "one", "Keep the idea close.", "", nil)
+	tester.Frame()
+	_ = tester.Click("编辑内容")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.TypeKey(0, ui.Key1, "1")
+	tester.Type(" edited translation")
+	if app.editDraft != "1 edited translation" || app.entries[0].Text != "把灵感留在手边，随时接着写。" {
+		t.Fatal("translation must be editable without changing the source")
+	}
+	_ = tester.Click("返回历史")
+	_ = tester.Click("设置")
+	_ = tester.Click("翻译")
+	for _, label := range []string{"模型服务", "翻译提示词", "检测模型", "保存翻译配置"} {
+		if !tester.HasText(label) {
+			t.Fatalf("missing translation setting %q", label)
+		}
+	}
+	_ = tester.Click("模型名称")
+	tester.Type("local-model")
+	_ = tester.Click("自定义翻译提示词")
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Type("Translate frontend documentation.")
+	tester.Frame()
+	if app.settings.Translation.Model != "" {
+		t.Fatal("draft must not apply before saving")
+	}
+	_ = tester.Click("保存翻译配置")
+	if app.settings.Translation.Model != "local-model" || app.settings.Translation.Prompt != "Translate frontend documentation." {
+		t.Fatalf("translation settings must persist both model and prompt: model=%q prompt=%q status=%q",
+			app.settings.Translation.Model, app.settings.Translation.Prompt, app.modelStatus)
+	}
+	_ = tester.Click("恢复提示词")
+	if app.translationDraft.Prompt != translation.DefaultPrompt {
+		t.Fatal("restore must recover the frontend translation prompt")
 	}
 }
 
@@ -166,13 +282,30 @@ func TestRenderClipboardStates(t *testing.T) {
 		}
 	}
 	save("clipboard")
-	app.settingsOpen = true
+	app.openSettings()
 	tester.Frame()
 	save("settings")
+	app.settingsTab = 1
+	app.translationDraft.Model = "Ornith-1.5-9B-GGUF:latest"
+	tester.Frame()
+	save("translation-settings")
+	app.translationDraft.Provider = translation.OpenAI
+	app.translationDraft.BaseURL = "http://127.0.0.1:1234/v1"
+	tester.Frame()
+	save("openai-settings")
 	app.settingsOpen = false
 	app.openEntry(app.entries[0])
 	tester.Frame()
 	save("editor")
+	app.translationMode = true
+	app.editDraft = "Keep your ideas close at hand, ready to pick up where you left off."
+	tester.Frame()
+	save("translation")
+	app.translating = true
+	tester.Frame()
+	save("translation-loading")
+	app.translating = false
+	app.translationMode = false
 	app.detail = nil
 	app.entries = nil
 	tester.Frame()

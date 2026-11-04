@@ -90,31 +90,19 @@ func (a *application) pollClipboard() {
 
 func (a *application) cancelPending() {
 	a.actionSequence++
-	if a.clickTimer != nil {
-		a.clickTimer.Stop()
-		a.clickTimer = nil
-	}
 	a.pasting = false
 }
 
 func (a *application) clickEntry(entry clipboard.Entry, index int) {
-	a.cancelPending()
 	a.selected = index
-	seq := a.actionSequence
-	if a.win == nil {
-		return
-	}
-	a.clickTimer = time.AfterFunc(a.clickDelay, func() {
-		a.win.Update(func() {
-			if a.actionSequence == seq && a.win.IsVisible() && a.detail == nil && !a.settingsOpen {
-				a.pasteEntry(entry)
-			}
-		})
-	})
+	a.pasteEntry(entry)
 }
 
 func (a *application) openEntry(entry clipboard.Entry) {
 	a.cancelPending()
+	a.cancelTranslation()
+	a.translationMode = false
+	a.translationError = ""
 	a.detail = &entry
 	a.editDraft = entry.Text
 	a.message = ""
@@ -124,20 +112,31 @@ func (a *application) openEntry(entry clipboard.Entry) {
 }
 
 func (a *application) saveEdit(paste bool) {
-	if a.detail == nil || a.detail.Kind != clipboard.KindText || a.saving {
+	if a.detail == nil || a.detail.Kind != clipboard.KindText || a.saving || a.translating || a.translationError != "" {
 		return
 	}
 	entry, draft, limit := *a.detail, a.editDraft, a.settings.HistoryLimit
+	translated := a.translationMode
 	a.saving = true
-	a.mutate(func(store *clipboard.Store) error { return store.Edit(entry.ID, draft, limit) }, func() {
+	a.mutate(func(store *clipboard.Store) error {
+		return saveText(store, entry, draft, limit, translated)
+	}, func() {
 		a.saving = false
 		a.detail = nil
-		a.searchHandle.Focus()
+		a.translationMode = false
+		a.historyHandle.Focus()
 		if paste {
 			entry.Text = draft
 			a.pasteEntry(entry)
 		}
 	})
+}
+
+func saveText(store *clipboard.Store, entry clipboard.Entry, draft string, limit int, translated bool) error {
+	if translated {
+		return store.Add(clipboard.Capture{Kind: clipboard.KindText, Text: draft, Source: "翻译"}, limit)
+	}
+	return store.Edit(entry.ID, draft, limit)
 }
 
 func (a *application) pasteEntry(entry clipboard.Entry) {
@@ -190,8 +189,8 @@ func (a *application) pasteEntry(entry clipboard.Entry) {
 			a.trusted = a.native.Trusted()
 			if !a.trusted {
 				a.pasting = false
+				a.openSettings()
 				a.message = "内容已复制。开启「辅助功能」后即可自动粘贴"
-				a.settingsOpen = true
 				return
 			}
 			if target.PID == 0 {

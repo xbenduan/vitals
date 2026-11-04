@@ -7,6 +7,19 @@ import (
 	"github.com/egoist/mygo"
 )
 
+func (a *application) openSettings() {
+	a.cancelPending()
+	a.cancelTranslation()
+	a.cancelModelDetection()
+	a.translationDraft = a.settings.Translation
+	a.models = nil
+	a.modelStatus = ""
+	a.settingsTab = 0
+	a.settingsOpen = true
+	a.setRecording(false)
+	a.message = ""
+}
+
 func (a *application) persistSettings() {
 	settings, path := a.settings, a.settingsPath
 	if path == "" {

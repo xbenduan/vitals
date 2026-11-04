@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"vitals/internal/atomicfile"
+	"vitals/internal/translation"
 )
 
 // DefaultShortcut opens the clipboard panel in a fresh configuration.
@@ -15,18 +16,20 @@ const DefaultShortcut = "Command+Shift+V"
 
 // Settings holds user preferences; OpenAtLogin is read from macOS, not persisted.
 type Settings struct {
-	Shortcut     string `json:"shortcut"`
-	HistoryLimit int    `json:"historyLimit"`
-	Paused       bool   `json:"paused"`
-	OpenAtLogin  bool   `json:"-"`
+	Shortcut     string             `json:"shortcut"`
+	HistoryLimit int                `json:"historyLimit"`
+	Paused       bool               `json:"paused"`
+	OpenAtLogin  bool               `json:"-"`
+	Translation  translation.Config `json:"translation"`
 }
 
 // Default returns the initial clipboard preferences.
 func Default() Settings {
-	return Settings{Shortcut: DefaultShortcut, HistoryLimit: 500}
+	return Settings{Shortcut: DefaultShortcut, HistoryLimit: 500, Translation: translation.Default()}
 }
 
 func (s *Settings) normalize() {
+	s.Translation = s.Translation.WithDefaults()
 	if strings.TrimSpace(s.Shortcut) == "" {
 		s.Shortcut = DefaultShortcut
 	}
